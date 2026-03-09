@@ -1,0 +1,571 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
+import { storeToRefs } from "pinia";
+import { useCockpitStore } from "./stores/cockpit";
+import type { ThreadRecord } from "../shared/contracts";
+
+const store = useCockpitStore();
+const {
+  projectThreadGroups,
+  selectedProjectId,
+  activeThreadId,
+  selectedProject,
+  activeThread,
+  transcriptMessages,
+  pendingPermissions,
+  activeToolCalls,
+  activePlan,
+  cliHealth,
+  gitStatus,
+  changedFiles,
+  models,
+  booting,
+  busy,
+  settingsOpen,
+  commitDialogOpen,
+  errorMessage,
+  commitOutput
+} = storeToRefs(store);
+
+const composer = ref("");
+const commitMessage = ref("");
+const cliExecutableDraft = ref("");
+
+const emptyCards = [
+  "Build a classic Snake game in this repo.",
+  "Create a one-page summary of this app.",
+  "Review this project for the highest-risk bugs."
+];
+
+const hasProjects = computed(() => projectThreadGroups.value.length > 0);
+const deleteThreadTarget = ref<ThreadRecord | null>(null);
+const collapsedProjects = ref<Record<string, boolean>>({});
+
+const canSend = computed(() => {
+  return Boolean(activeThread.value) && Boolean(composer.value.trim()) && activeThread.value?.status !== "running";
+});
+
+const modelOptions = computed(() => models.value?.models ?? []);
+const modelSelection = computed({
+  get: () => activeThread.value?.modelId ?? models.value?.currentModelId ?? "",
+  set: async (value: string) => {
+    if (!value || value === activeThread.value?.modelId) {
+      return;
+    }
+    await store.updateThreadModel(value);
+  }
+});
+
+const cliNeedsAttention = computed(() => {
+  return cliHealth.value && cliHealth.value.state !== "ready";
+});
+
+const gitLabel = computed(() => {
+  if (!gitStatus.value.branch) {
+    return "No git repo";
+  }
+
+  const parts = [gitStatus.value.branch];
+  if (gitStatus.value.ahead) {
+    parts.push(`↑${gitStatus.value.ahead}`);
+  }
+  if (gitStatus.value.behind) {
+    parts.push(`↓${gitStatus.value.behind}`);
+  }
+  if (gitStatus.value.changedCount) {
+    parts.push(`${gitStatus.value.changedCount} changed`);
+  }
+  return parts.join("  ");
+});
+
+const projectSubtitle = computed(() => {
+  if (!selectedProject.value) {
+    return "Add a local repo to get started.";
+  }
+
+  return selectedProject.value.rootPath;
+});
+
+async function submitPrompt(nextPrompt?: string): Promise<void> {
+  const value = nextPrompt ?? composer.value;
+  if (!value.trim()) {
+    return;
+  }
+
+  composer.value = "";
+  await store.sendPrompt(value);
+}
+
+function relativeTime(value: string | null): string {
+  if (!value) {
+    return "New";
+  }
+
+  const diff = Date.now() - new Date(value).getTime();
+  const minutes = Math.max(1, Math.round(diff / 60000));
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  const days = Math.round(hours / 24);
+  return `${days}d`;
+}
+
+function requestThreadDelete(thread: ThreadRecord): void {
+  deleteThreadTarget.value = thread;
+}
+
+function projectThreadsVisible(projectId: string): boolean {
+  return !collapsedProjects.value[projectId];
+}
+
+function toggleProjectThreads(projectId: string): void {
+  const isCollapsed = Boolean(collapsedProjects.value[projectId]);
+  collapsedProjects.value = {
+    ...collapsedProjects.value,
+    [projectId]: !isCollapsed
+  };
+}
+
+async function removeProject(projectId: string): Promise<void> {
+  await store.removeProject(projectId);
+}
+
+function closeDeleteThreadDialog(): void {
+  deleteThreadTarget.value = null;
+}
+
+function handleDeleteDialogVisibility(value: boolean): void {
+  if (!value) {
+    closeDeleteThreadDialog();
+  }
+}
+
+async function confirmThreadDelete(): Promise<void> {
+  if (!deleteThreadTarget.value) {
+    return;
+  }
+
+  const threadId = deleteThreadTarget.value.id;
+  deleteThreadTarget.value = null;
+  await store.deleteThread(threadId);
+}
+
+onMounted(async () => {
+  await store.bootstrap();
+  cliExecutableDraft.value = store.settings.cliExecutablePath ?? "";
+});
+</script>
+
+<template>
+  <div class="cockpit-theme-dark h-screen overflow-hidden bg-[radial-gradient(circle_at_top,#19151f,transparent_38%),linear-gradient(180deg,#09090b_0%,#050507_100%)] text-zinc-100">
+    <div class="flex h-full">
+      <aside class="sidebar-shell hidden w-[360px] shrink-0 border-r border-white/8 xl:flex">
+        <div class="flex h-full flex-col">
+          <div class="px-8 pt-12">
+            <div class="window-badge">Cockpit</div>
+          </div>
+
+          <div class="min-h-0 flex-1 px-6 pb-4 pt-10">
+            <div class="mb-4 flex items-center justify-between px-2">
+              <span class="section-label">Threads</span>
+              <button class="sidebar-inline-action" type="button" @click="store.addProject()">
+                <i class="pi pi-folder-open text-sm" />
+                <span>Add project</span>
+              </button>
+            </div>
+
+            <div class="thread-list">
+              <div v-if="!hasProjects" class="sidebar-empty-state">
+                Add a project to start organizing threads.
+              </div>
+
+              <section
+                v-for="group in projectThreadGroups"
+                :key="group.project.id"
+                class="project-group"
+              >
+                <div
+                  class="project-pill"
+                  :class="{ 'project-pill-active': group.project.id === selectedProjectId }"
+                >
+                  <button
+                    class="project-pill-main"
+                    type="button"
+                    @click="store.selectProject(group.project.id)"
+                  >
+                    <span class="project-pill-name">{{ group.project.name }}</span>
+                    <span class="text-xs text-zinc-400">{{ relativeTime(group.project.lastOpenedAt) }}</span>
+                  </button>
+                  <div class="project-group-actions">
+                    <button
+                      class="icon-button"
+                      type="button"
+                      :aria-expanded="projectThreadsVisible(group.project.id)"
+                      :aria-label="projectThreadsVisible(group.project.id) ? 'Hide threads' : 'Show threads'"
+                      @click.stop="toggleProjectThreads(group.project.id)"
+                    >
+                      <i :class="projectThreadsVisible(group.project.id) ? 'pi pi-angle-down' : 'pi pi-angle-right'" />
+                    </button>
+                    <button
+                      class="icon-button"
+                      type="button"
+                      aria-label="New thread"
+                      @click.stop="store.createThread(group.project.id)"
+                    >
+                      <i class="pi pi-plus" />
+                    </button>
+                    <button
+                      class="icon-button"
+                      type="button"
+                      :aria-label="`Remove project ${group.project.name}`"
+                      @click.stop="removeProject(group.project.id)"
+                    >
+                      <i class="pi pi-times" />
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="projectThreadsVisible(group.project.id) && group.threads.length" class="project-thread-list">
+                  <div
+                    v-for="thread in group.threads"
+                    :key="thread.id"
+                    class="thread-row"
+                  >
+                    <button
+                      class="thread-item thread-item-grouped"
+                      :class="{ 'thread-item-active': thread.id === activeThreadId }"
+                      @click="store.openThread(thread.id)"
+                    >
+                      <div class="flex items-start gap-3">
+                        <span
+                          class="mt-1 h-2.5 w-2.5 rounded-full"
+                          :class="thread.status === 'running' ? 'bg-cyan-400' : thread.status === 'error' ? 'bg-rose-400' : 'bg-emerald-400/80'"
+                        />
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate font-medium text-white">{{ thread.title }}</div>
+                          <div class="mt-1 truncate text-sm text-zinc-400">{{ thread.summary || "No transcript yet." }}</div>
+                        </div>
+                        <div class="text-xs text-zinc-500">{{ relativeTime(thread.lastMessageAt ?? thread.createdAt) }}</div>
+                      </div>
+                    </button>
+                    <button
+                      class="icon-button thread-delete-button"
+                      type="button"
+                      aria-label="Delete thread"
+                      @click.stop="requestThreadDelete(thread)"
+                    >
+                      <i class="pi pi-trash" />
+                    </button>
+                  </div>
+                </div>
+
+                <div v-else-if="projectThreadsVisible(group.project.id)" class="thread-empty-state">
+                  No threads yet.
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="px-6 pb-8 pt-4">
+            <button class="sidebar-action" type="button" @click="settingsOpen = true">
+              <i class="pi pi-cog text-sm" />
+              <span>Settings</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="flex min-w-0 flex-1 flex-col">
+        <header class="flex items-center gap-4 border-b border-white/8 px-6 py-5 backdrop-blur">
+          <div class="min-w-0 flex-1">
+            <div class="truncate text-2xl font-semibold tracking-tight text-white">
+              {{ activeThread?.title ?? "New thread" }}
+            </div>
+            <div class="mt-1 truncate text-sm text-zinc-500">
+              {{ projectSubtitle }}
+            </div>
+          </div>
+
+          <div class="hidden items-center gap-2 rounded-full border border-white/10 bg-white/4 px-4 py-2 text-sm text-zinc-300 md:flex">
+            <i class="pi pi-code-branch text-xs" />
+            <span>{{ gitLabel }}</span>
+          </div>
+
+          <PButton label="Refresh models" severity="secondary" text @click="store.refreshModels" />
+          <PButton label="Open" severity="secondary" outlined @click="store.openProjectPath" />
+          <PButton
+            label="Commit & Push"
+            :disabled="!selectedProject || activeThread?.status === 'running'"
+            @click="commitDialogOpen = true"
+          />
+        </header>
+
+        <section class="relative flex min-h-0 flex-1 flex-col px-6 pb-6 pt-6">
+          <div class="absolute inset-x-12 top-5 h-40 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.06),transparent_65%)] blur-3xl" />
+
+          <PMessage
+            v-if="errorMessage"
+            severity="error"
+            :closable="false"
+            class="mb-4"
+          >
+            {{ errorMessage }}
+          </PMessage>
+
+          <PMessage
+            v-if="cliNeedsAttention"
+            severity="warn"
+            :closable="false"
+            class="mb-4"
+          >
+            <div class="flex flex-col gap-2">
+              <div class="font-medium text-zinc-100">
+                Copilot CLI {{ cliHealth?.state === "missing" ? "is missing" : "needs login" }}
+              </div>
+              <div class="text-sm text-zinc-300">
+                Install with <code>brew install github/copilot-cli/copilot</code> or <code>npm install -g @github/copilot</code>, then run <code>copilot auth login</code>.
+              </div>
+            </div>
+          </PMessage>
+
+          <div class="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div class="space-y-3">
+              <section
+                v-for="permission in pendingPermissions"
+                :key="permission.id"
+                class="glass-panel rounded-3xl p-4"
+              >
+                <div class="text-xs uppercase tracking-[0.24em] text-zinc-500">Permission</div>
+                <div class="mt-2 text-base font-medium text-white">{{ permission.prompt }}</div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                  <PButton
+                    v-for="option in permission.options"
+                    :key="option.optionId"
+                    size="small"
+                    :label="option.name"
+                    @click="store.resolvePermission(permission.id, option.optionId)"
+                  />
+                  <PButton size="small" severity="secondary" outlined label="Cancel" @click="store.resolvePermission(permission.id)" />
+                </div>
+              </section>
+            </div>
+
+            <aside class="space-y-4">
+              <section v-if="activePlan.length" class="glass-panel rounded-3xl p-4">
+                <div class="section-label">Plan</div>
+                <div class="mt-4 space-y-3">
+                  <div v-for="entry in activePlan" :key="entry.content" class="flex items-start gap-3">
+                    <span
+                      class="mt-1 h-2.5 w-2.5 rounded-full"
+                      :class="entry.status === 'completed' ? 'bg-emerald-400' : entry.status === 'in_progress' ? 'bg-cyan-400' : 'bg-zinc-500'"
+                    />
+                    <div class="min-w-0">
+                      <div class="text-sm text-zinc-100">{{ entry.content }}</div>
+                      <div class="text-xs uppercase tracking-[0.2em] text-zinc-500">{{ entry.status }}</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section v-if="activeToolCalls.length" class="glass-panel rounded-3xl p-4">
+                <div class="section-label">Tool Calls</div>
+                <div class="mt-4 space-y-3">
+                  <div v-for="tool in activeToolCalls.slice(0, 4)" :key="tool.toolCallId" class="rounded-2xl border border-white/8 bg-black/20 p-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="truncate text-sm font-medium text-white">{{ tool.title }}</div>
+                      <PTag :value="tool.status ?? 'pending'" severity="contrast" />
+                    </div>
+                    <div class="mt-2 line-clamp-3 text-xs text-zinc-400">{{ tool.content || tool.locations.join(', ') }}</div>
+                  </div>
+                </div>
+              </section>
+            </aside>
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div
+              v-if="!transcriptMessages.length && !booting"
+              class="hero-shell mx-auto flex min-h-full max-w-4xl flex-col items-center justify-center gap-10 pb-10 pt-12 text-center"
+            >
+              <div class="hero-mark">
+                <i class="pi pi-sparkles text-4xl" />
+              </div>
+              <div>
+                <div class="text-6xl font-semibold tracking-tight text-white">Let’s build</div>
+                <div class="mt-3 text-5xl font-medium text-zinc-500">
+                  {{ selectedProject?.name ?? "cockpit-app" }}
+                </div>
+              </div>
+
+              <div class="grid w-full gap-4 md:grid-cols-3">
+                <button
+                  v-for="card in emptyCards"
+                  :key="card"
+                  class="prompt-card text-left"
+                  @click="submitPrompt(card)"
+                >
+                  {{ card }}
+                </button>
+              </div>
+            </div>
+
+            <div v-else class="mx-auto flex max-w-4xl flex-col gap-5 pb-10 pt-6">
+              <article
+                v-for="message in transcriptMessages"
+                :key="message.id"
+                class="message-shell"
+                :class="{
+                  'message-user': message.role === 'user',
+                  'message-assistant': message.role === 'assistant',
+                  'message-system': message.role === 'system'
+                }"
+              >
+                <div class="mb-2 flex items-center justify-between gap-4">
+                  <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">
+                    {{ message.kind === 'thought' ? 'Reasoning' : message.role }}
+                  </div>
+                  <div class="text-xs text-zinc-500">{{ relativeTime(message.createdAt) }}</div>
+                </div>
+                <div class="whitespace-pre-wrap text-[15px] leading-7 text-zinc-100">{{ message.content }}</div>
+              </article>
+            </div>
+          </div>
+
+          <div class="mt-5">
+            <div class="composer-shell">
+              <PTextarea
+                v-model="composer"
+                autoResize
+                rows="3"
+                class="w-full"
+                placeholder="Ask Cockpit anything, @tag files/folders, or use /models"
+                @keydown.meta.enter.prevent="submitPrompt()"
+                @keydown.ctrl.enter.prevent="submitPrompt()"
+              />
+              <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <div class="w-full sm:w-56">
+                  <PSelect
+                    v-model="modelSelection"
+                    :options="modelOptions"
+                    optionLabel="name"
+                    optionValue="modelId"
+                    :disabled="!activeThread || activeThread.status === 'running' || !modelOptions.length"
+                    placeholder="Model"
+                    fluid
+                  />
+                </div>
+                <div class="flex items-center gap-2">
+                  <PButton
+                    v-if="activeThread?.status === 'running'"
+                    label="Stop"
+                    severity="danger"
+                    text
+                    @click="store.stopRun"
+                  />
+                  <PButton
+                    v-else-if="activeThread?.status === 'error'"
+                    label="Retry"
+                    severity="secondary"
+                    outlined
+                    @click="store.retryRun"
+                  />
+                  <PButton
+                    label="Send"
+                    :loading="busy"
+                    :disabled="!canSend"
+                    @click="submitPrompt()"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <PDialog
+      v-model:visible="commitDialogOpen"
+      modal
+      header="Commit & Push"
+      :style="{ width: 'min(860px, 92vw)' }"
+    >
+      <div class="space-y-5">
+        <div class="grid gap-5 md:grid-cols-[minmax(0,1fr)_280px]">
+          <div class="rounded-3xl border border-white/8 bg-zinc-950/80 p-4">
+            <div class="section-label">Changed Files</div>
+            <div class="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-2">
+              <div v-if="!changedFiles.length" class="rounded-2xl border border-white/6 bg-white/[0.03] p-4 text-sm text-zinc-400">
+                Working tree is clean.
+              </div>
+              <div v-for="file in changedFiles" :key="file.path" class="rounded-2xl border border-white/6 bg-white/[0.03] p-3">
+                <div class="font-medium text-zinc-100">{{ file.path }}</div>
+                <div class="mt-1 text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  {{ file.stagedStatus ?? "·" }} {{ file.worktreeStatus ?? "·" }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rounded-3xl border border-white/8 bg-zinc-950/80 p-4">
+            <div class="section-label">Commit Message</div>
+            <PInputText v-model="commitMessage" fluid class="mt-4" placeholder="Summarize this change" />
+            <PButton
+              class="mt-4 w-full"
+              label="Commit & Push"
+              :disabled="!commitMessage.trim() || !selectedProject"
+              @click="store.runCommitAndPush(commitMessage)"
+            />
+            <div v-if="commitOutput" class="mt-4 whitespace-pre-wrap rounded-2xl border border-white/6 bg-black/30 p-3 text-xs text-zinc-400">
+              {{ commitOutput }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </PDialog>
+
+    <PDialog
+      :visible="Boolean(deleteThreadTarget)"
+      modal
+      header="Delete Thread"
+      :style="{ width: 'min(420px, 92vw)' }"
+      @update:visible="handleDeleteDialogVisibility"
+    >
+      <div class="space-y-5">
+        <div class="text-sm text-zinc-300">
+          Delete <span class="font-medium text-white">{{ deleteThreadTarget?.title }}</span>? This cannot be undone.
+        </div>
+        <div class="flex justify-end gap-3">
+          <PButton label="Cancel" severity="secondary" text @click="closeDeleteThreadDialog" />
+          <PButton label="Delete thread" severity="danger" :loading="busy" @click="confirmThreadDelete" />
+        </div>
+      </div>
+    </PDialog>
+
+    <PDrawer v-model:visible="settingsOpen" position="right" header="Settings" :style="{ width: '420px' }">
+      <div class="space-y-6">
+        <div>
+          <div class="section-label">Copilot CLI</div>
+          <div class="mt-3 text-sm text-zinc-400">
+            Override the executable path when the CLI is installed somewhere non-standard.
+          </div>
+          <PInputText v-model="cliExecutableDraft" fluid class="mt-4" placeholder="/usr/local/bin/copilot" />
+          <PButton class="mt-3" label="Save path" @click="store.saveSettings({ cliExecutablePath: cliExecutableDraft || null })" />
+        </div>
+
+        <div class="rounded-3xl border border-white/8 bg-zinc-950/70 p-4">
+          <div class="section-label">Install</div>
+          <div class="mt-3 space-y-2 text-sm text-zinc-300">
+            <div><code>brew install github/copilot-cli/copilot</code></div>
+            <div><code>npm install -g @github/copilot</code></div>
+            <div><code>copilot auth login</code></div>
+            <div><code>copilot auth status</code></div>
+          </div>
+        </div>
+      </div>
+    </PDrawer>
+  </div>
+</template>

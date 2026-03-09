@@ -1,0 +1,337 @@
+@import "tailwindcss";
+@plugin "tailwindcss-primeui";
+
+:root {
+  color-scheme: dark;
+  --font-sans: "SF Pro Display", "Avenir Next", "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", monospace;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-family: var(--font-sans);
+  background: #050507;
+}
+
+body {
+  color: #f4f4f5;
+  overflow: hidden;
+}
+
+code {
+  font-family: var(--font-mono);
+  color: #f5f5f5;
+}
+
+.sidebar-shell {
+  background:
+    radial-gradient(circle at bottom left, rgba(37, 99, 235, 0.35), transparent 46%),
+    radial-gradient(circle at top left, rgba(76, 29, 149, 0.45), transparent 42%),
+    linear-gradient(180deg, rgba(31, 24, 78, 0.96) 0%, rgba(17, 39, 96, 0.92) 100%);
+}
+
+.window-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.55rem 0.9rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.section-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(161, 161, 170, 0.92);
+}
+
+.sidebar-action,
+.project-pill,
+.thread-item,
+.icon-button,
+.sidebar-inline-action,
+.prompt-card {
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    opacity 140ms ease;
+}
+
+.sidebar-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.85rem;
+  border-radius: 1rem;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.9rem 1rem;
+  font-size: 1.05rem;
+  color: #f4f4f5;
+}
+
+.sidebar-inline-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.5rem 0.9rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f4f4f5;
+}
+
+.sidebar-action:hover,
+.project-pill:hover,
+.thread-item:hover,
+.icon-button:hover,
+.sidebar-inline-action:hover,
+.prompt-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.project-pill {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.85rem 1rem;
+  color: white;
+}
+
+.project-pill-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.project-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-pill-active {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.thread-list {
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.sidebar-empty-state,
+.thread-empty-state {
+  border-radius: 1.25rem;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 1rem 1.1rem;
+  font-size: 0.92rem;
+  color: rgba(212, 212, 216, 0.84);
+}
+
+.project-group + .project-group {
+  margin-top: 1rem;
+}
+
+.project-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.project-thread-list {
+  margin-top: 0.65rem;
+  padding-left: 0.75rem;
+}
+
+.thread-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.thread-row + .thread-row {
+  margin-top: 0.45rem;
+}
+
+.thread-item {
+  display: block;
+  width: 100%;
+  border-radius: 1.25rem;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 1rem;
+  text-align: left;
+}
+
+.thread-item-grouped {
+  flex: 1;
+}
+
+.thread-item-active {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.icon-button {
+  display: inline-flex;
+  height: 2.2rem;
+  width: 2.2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4f4f5;
+}
+
+.thread-delete-button {
+  margin-top: 0.5rem;
+  height: 2.5rem;
+  width: 2.5rem;
+  flex: 0 0 auto;
+}
+
+.glass-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0.025) 100%),
+    rgba(10, 10, 13, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 24px 80px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(26px);
+}
+
+.hero-shell {
+  position: relative;
+}
+
+.hero-mark {
+  display: grid;
+  place-items: center;
+  height: 4.8rem;
+  width: 4.8rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+}
+
+.prompt-card {
+  min-height: 8.75rem;
+  border-radius: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%),
+    rgba(12, 12, 15, 0.84);
+  padding: 1.5rem;
+  font-size: 1.12rem;
+  line-height: 1.5rem;
+  color: #f4f4f5;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.22);
+}
+
+.message-shell {
+  border-radius: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 1.35rem 1.45rem;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.18);
+}
+
+.message-user {
+  margin-left: 7rem;
+  background: linear-gradient(180deg, rgba(39, 39, 42, 0.9) 0%, rgba(24, 24, 27, 0.92) 100%);
+}
+
+.message-assistant {
+  margin-right: 4rem;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.04), transparent 50%),
+    linear-gradient(180deg, rgba(14, 14, 17, 0.95) 0%, rgba(8, 8, 11, 0.95) 100%);
+}
+
+.message-system {
+  border-color: rgba(244, 63, 94, 0.22);
+  background: rgba(60, 10, 23, 0.34);
+}
+
+.composer-shell {
+  border-radius: 2.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%),
+    rgba(12, 12, 15, 0.9);
+  padding: 1.1rem 1.1rem 0.9rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 30px 80px rgba(0, 0, 0, 0.28);
+}
+
+.composer-shell .p-textarea {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #fafafa;
+  min-height: 8rem;
+}
+
+.composer-shell .p-textarea:enabled:focus {
+  box-shadow: none;
+}
+
+.p-dialog,
+.p-drawer {
+  background: #09090b !important;
+  color: #fafafa !important;
+}
+
+.p-dialog .p-dialog-header,
+.p-drawer .p-drawer-header {
+  background: rgba(9, 9, 11, 0.98) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.p-dialog .p-dialog-content,
+.p-drawer .p-drawer-content {
+  background: #09090b !important;
+}
+
+@media (max-width: 1279px) {
+  .message-user,
+  .message-assistant {
+    margin-inline: 0;
+  }
+}
