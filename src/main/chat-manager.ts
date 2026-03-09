@@ -7,6 +7,7 @@ import {
   ndJsonStream,
   type Client,
   type ModelInfo,
+  type NewSessionResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -22,6 +23,7 @@ import {
   type MessageKind,
   type MessageRecord,
   type ModelDiscoveryResult,
+  type ModelRecord,
   type PermissionOptionRecord,
   type PermissionRequestRecord,
   type PlanEntryRecord,
@@ -36,6 +38,8 @@ import { resolveCliExecutable } from "./system-service";
 import { AppStore } from "./store";
 
 type EmitFn = (event: ChatEvent) => void;
+
+const ACP_START_TIMEOUT_MS = 8000;
 
 type PendingPermission = {
   permission: PermissionRequestRecord;
@@ -120,6 +124,82 @@ function normalizeCliError(error: unknown, executablePath: string): CliHealth {
     executablePath,
     state: /auth|required|login/i.test(message) ? "auth_required" : "error",
     error: message
+  };
+}
+
+function mergeModels(...groups: ModelRecord[][]): ModelRecord[] {
+  const merged = new Map<string, ModelRecord>();
+
+  for (const group of groups) {
+    for (const model of group) {
+      if (!merged.has(model.modelId)) {
+        merged.set(model.modelId, model);
+      }
+    }
+  }
+
+  return [...merged.values()];
+}
+
+function applyCurrentModel(
+  discovery: ModelDiscoveryResult,
+  currentModelId: string | null
+): ModelDiscoveryResult {
+  if (!currentModelId) {
+    return discovery;
+  }
+
+  return {
+    ...discovery,
+    currentModelId,
+    models: mergeModels(discovery.models, [{ modelId: currentModelId, name: currentModelId }])
+  };
+}
+
+export function modelDiscoveryFromSession(
+  session: NewSessionResponse,
+  fallbackModelId: string | null
+): ModelDiscoveryResult | null {
+  const sessionModels = session.models?.availableModels?.map((model: ModelInfo) => ({
+    modelId: model.modelId,
+    name: model.name
+  })) ?? [];
+
+  const modelConfig = session.configOptions?.find((option) => option.type === "select" && option.id === "model");
+  const configModels =
+    modelConfig?.type === "select"
+      ? modelConfig.options.flatMap((option) =>
+          "value" in option
+            ? [
+                {
+                  modelId: option.value,
+                  name: option.name
+                }
+              ]
+            : option.options.map((groupOption) => ({
+                modelId: groupOption.value,
+                name: groupOption.name
+              }))
+        )
+      : [];
+
+  const models = mergeModels(sessionModels, configModels);
+  const currentModelId =
+    session.models?.currentModelId ??
+    (modelConfig?.type === "select" && typeof modelConfig.currentValue === "string"
+      ? modelConfig.currentValue
+      : fallbackModelId);
+
+  if (!models.length && !currentModelId) {
+    return null;
+  }
+
+  return {
+    models,
+    currentModelId,
+    discoveredAt: nowIso(),
+    source: "session",
+    error: !models.length ? "Copilot CLI did not return any models." : undefined
   };
 }
 
@@ -332,14 +412,22 @@ export class ChatManager {
   }
 
   async getModels(threadId: string | null): Promise<ModelDiscoveryResult> {
+    const thread = threadId ? await this.store.getThread(threadId) : null;
+    const settings = await this.store.getSettings();
+    const currentModelId = thread?.modelId?.trim() || settings.defaultModelId?.trim() || null;
+
     if (this.modelCache) {
-      return {
-        ...this.modelCache,
-        source: "cache"
-      };
+      return applyCurrentModel(
+        {
+          ...this.modelCache,
+          source: "cache"
+        },
+        currentModelId ?? this.modelCache.currentModelId
+      );
     }
 
-    return this.refreshModels(threadId);
+    const discovery = await this.refreshModels(threadId);
+    return applyCurrentModel(discovery, currentModelId ?? discovery.currentModelId);
   }
 
   async refreshModels(threadId: string | null): Promise<ModelDiscoveryResult> {
@@ -347,7 +435,7 @@ export class ChatManager {
     const project = thread ? await this.requireProject(thread.projectId) : await this.getSelectedProject();
     const settings = await this.store.getSettings();
     const executable = resolveCliExecutable(settings);
-    const currentModelId = thread?.modelId ?? null;
+    const currentModelId = thread?.modelId?.trim() || settings.defaultModelId?.trim() || null;
 
     if (!project) {
       const fallback = buildFallbackDiscovery(currentModelId, "Add a project to discover models.");
@@ -360,15 +448,7 @@ export class ChatManager {
       return fallback;
     }
 
-    let child: ChildProcessWithoutNullStreams | null = null;
-
     try {
-      child = spawn(executable, ["--acp", "--stdio"], {
-        cwd: project.rootPath,
-        env: process.env,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-
       const outputChunks: string[] = [];
       const client: Client = {
         async requestPermission() {
@@ -378,37 +458,34 @@ export class ChatManager {
         },
         async sessionUpdate(params: SessionNotification) {
           const update = params.update;
-          if (
-            update.sessionUpdate === "agent_message_chunk" &&
-            update.content.type === "text"
-          ) {
+          if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
             outputChunks.push(update.content.text);
           }
         }
       };
 
-      const connection = new ClientSideConnection(
-        () => client,
-        ndJsonStream(
-          Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-          Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>
-        )
+      const { child, connection, session } = await this.startCliSession(
+        executable,
+        project.rootPath,
+        [],
+        client
       );
 
-      const initResponse = await connection.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-        clientInfo: {
-          name: "Cockpit",
-          version: app.getVersion()
-        }
-      });
-      const sessionResponse = await connection.newSession({
-        cwd: project.rootPath,
-        mcpServers: []
-      });
+      const sessionDiscovery = modelDiscoveryFromSession(session, currentModelId);
+      if (sessionDiscovery?.models.length) {
+        const discovery = applyCurrentModel(sessionDiscovery, currentModelId ?? sessionDiscovery.currentModelId);
+        this.modelCache = discovery;
+        this.emit({
+          type: "models-updated",
+          threadId,
+          discovery
+        });
+        child.kill();
+        return discovery;
+      }
 
       await connection.prompt({
-        sessionId: sessionResponse.sessionId,
+        sessionId: session.sessionId,
         prompt: [
           {
             type: "text",
@@ -418,19 +495,17 @@ export class ChatManager {
       });
 
       const parsed = parseDiscoveredModels(outputChunks.join(""));
-      const sessionModels = sessionResponse.models?.availableModels?.map((model: ModelInfo) => ({
-        modelId: model.modelId,
-        name: model.name
-      }));
-
-      const models = parsed.length ? parsed : sessionModels ?? [];
-      const discovery: ModelDiscoveryResult = {
-        models,
-        currentModelId: sessionResponse.models?.currentModelId ?? currentModelId,
-        discoveredAt: nowIso(),
-        source: parsed.length ? "prompt" : sessionModels?.length ? "session" : "fallback",
-        error: !models.length ? "Copilot CLI did not return any models." : undefined
-      };
+      const models = parsed.length ? parsed : sessionDiscovery?.models ?? [];
+      const discovery = applyCurrentModel(
+        {
+          models,
+          currentModelId: sessionDiscovery?.currentModelId ?? currentModelId,
+          discoveredAt: sessionDiscovery?.discoveredAt ?? nowIso(),
+          source: parsed.length ? "prompt" : sessionDiscovery?.source ?? "fallback",
+          error: !models.length ? "Copilot CLI did not return any models." : undefined
+        },
+        currentModelId ?? sessionDiscovery?.currentModelId ?? null
+      );
 
       this.modelCache = discovery;
       this.emit({
@@ -439,15 +514,12 @@ export class ChatManager {
         discovery
       });
 
-      if (initResponse.agentCapabilities?.sessionCapabilities && child) {
-        child.kill();
-      }
-
+      child.kill();
       return discovery;
     } catch (error) {
-      const fallback = buildFallbackDiscovery(
-        currentModelId,
-        error instanceof Error ? error.message : "Model discovery failed."
+      const fallback = applyCurrentModel(
+        buildFallbackDiscovery(currentModelId, error instanceof Error ? error.message : "Model discovery failed."),
+        currentModelId
       );
       this.modelCache = fallback;
       this.emit({
@@ -456,9 +528,12 @@ export class ChatManager {
         discovery: fallback
       });
       return fallback;
-    } finally {
-      child?.kill();
     }
+  }
+
+  async prepareThread(threadId: string): Promise<ThreadRecord> {
+    const thread = await this.requireThread(threadId);
+    return this.normalizeThreadModel(thread);
   }
 
   async restartThreadRuntime(threadId: string): Promise<void> {
@@ -472,35 +547,26 @@ export class ChatManager {
   }
 
   private async ensureRuntime(thread: ThreadRecord, project: ProjectRecord): Promise<Runtime> {
-    const existing = this.runtimes.get(thread.id);
-    if (existing && existing.modelId === thread.modelId && existing.projectId === thread.projectId) {
+    const preparedThread = await this.normalizeThreadModel(thread);
+    const existing = this.runtimes.get(preparedThread.id);
+    if (existing && existing.modelId === preparedThread.modelId && existing.projectId === preparedThread.projectId) {
       await existing.ready;
       return existing;
     }
 
     if (existing) {
       existing.child.kill();
-      this.runtimes.delete(thread.id);
+      this.runtimes.delete(preparedThread.id);
     }
 
     const settings = await this.store.getSettings();
     const executable = resolveCliExecutable(settings);
 
-    const child = spawn(
-      executable,
-      ["--acp", "--stdio", ...(thread.modelId ? ["--model", thread.modelId] : [])],
-      {
-        cwd: project.rootPath,
-        env: process.env,
-        stdio: ["pipe", "pipe", "pipe"]
-      }
-    );
-
     const runtime: Runtime = {
-      threadId: thread.id,
+      threadId: preparedThread.id,
       projectId: project.id,
-      modelId: thread.modelId,
-      child,
+      modelId: preparedThread.modelId,
+      child: null as never,
       connection: null as never,
       sessionId: "",
       assistantMessageId: null,
@@ -513,11 +579,86 @@ export class ChatManager {
     };
 
     const client: Client = {
-      requestPermission: (params) => this.handlePermissionRequest(thread.id, runtime, params),
-      sessionUpdate: (params) => this.handleSessionUpdate(thread.id, runtime, params)
+      requestPermission: (params) => this.handlePermissionRequest(preparedThread.id, runtime, params),
+      sessionUpdate: (params) => this.handleSessionUpdate(preparedThread.id, runtime, params)
     };
 
-    runtime.connection = new ClientSideConnection(
+    runtime.ready = (async () => {
+      const { child, connection, session } = await this.startCliSession(
+        executable,
+        project.rootPath,
+        preparedThread.modelId ? ["--model", preparedThread.modelId] : [],
+        client
+      );
+      runtime.child = child;
+      runtime.connection = connection;
+      runtime.sessionId = session.sessionId;
+
+      const sessionDiscovery = modelDiscoveryFromSession(session, preparedThread.modelId);
+      if (sessionDiscovery?.models.length) {
+        this.modelCache = sessionDiscovery;
+      }
+      child.on("exit", () => {
+        this.runtimes.delete(preparedThread.id);
+      });
+    })();
+
+    this.runtimes.set(preparedThread.id, runtime);
+    await runtime.ready;
+    return runtime;
+  }
+
+  private async normalizeThreadModel(thread: ThreadRecord): Promise<ThreadRecord> {
+    const requestedModelId = thread.modelId.trim();
+    const discovery = await this.getModels(thread.id);
+    const availableModelIds = new Set(discovery.models.map((model) => model.modelId));
+    const fallbackModelId = discovery.currentModelId ?? discovery.models[0]?.modelId ?? "";
+    const requiresUpdate =
+      (!requestedModelId && Boolean(fallbackModelId)) ||
+      (requestedModelId && availableModelIds.size > 0 && !availableModelIds.has(requestedModelId));
+
+    if (!requiresUpdate) {
+      return thread;
+    }
+
+    const updatedThread = await this.store.updateThread(thread.id, {
+      modelId: fallbackModelId
+    });
+
+    this.emit({
+      type: "models-updated",
+      threadId: thread.id,
+      discovery: {
+        ...discovery,
+        currentModelId: fallbackModelId
+      }
+    });
+
+    return updatedThread;
+  }
+
+  private async startCliSession(
+    executable: string,
+    cwd: string,
+    args: string[],
+    client: Client
+  ): Promise<{
+    child: ChildProcessWithoutNullStreams;
+    connection: ClientSideConnection;
+    session: NewSessionResponse;
+  }> {
+    const child = spawn(executable, ["--acp", "--stdio", ...args], {
+      cwd,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+
+    const connection = new ClientSideConnection(
       () => client,
       ndJsonStream(
         Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
@@ -525,41 +666,97 @@ export class ChatManager {
       )
     );
 
-    runtime.ready = (async () => {
-      await runtime.connection.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-        clientInfo: {
-          name: "Cockpit",
-          version: app.getVersion()
-        }
-      });
+    try {
+      await this.awaitAcpStartup(
+        child,
+        () => stderr,
+        connection.initialize({
+          protocolVersion: PROTOCOL_VERSION,
+          clientInfo: {
+            name: "Cockpit",
+            version: app.getVersion()
+          }
+        }),
+        "initialization"
+      );
 
-      const session = await runtime.connection.newSession({
-        cwd: project.rootPath,
-        mcpServers: []
-      });
-      runtime.sessionId = session.sessionId;
+      const session = await this.awaitAcpStartup(
+        child,
+        () => stderr,
+        connection.newSession({
+          cwd,
+          mcpServers: []
+        }),
+        "session startup"
+      );
 
-      if (session.models?.availableModels?.length) {
-        this.modelCache = {
-          models: session.models.availableModels.map((model) => ({
-            modelId: model.modelId,
-            name: model.name
-          })),
-          currentModelId: session.models.currentModelId,
-          discoveredAt: nowIso(),
-          source: "session"
-        };
-      }
-    })();
+      return {
+        child,
+        connection,
+        session
+      };
+    } catch (error) {
+      child.kill();
+      throw error;
+    }
+  }
 
-    child.on("exit", () => {
-      this.runtimes.delete(thread.id);
+  private async awaitAcpStartup<T>(
+    child: ChildProcessWithoutNullStreams,
+    getStderr: () => string,
+    operation: Promise<T>,
+    phase: string
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error(this.formatCliStartupError(`Timed out during ACP ${phase}.`, getStderr())));
+      }, ACP_START_TIMEOUT_MS);
+
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        cleanup();
+        reject(
+          new Error(
+            this.formatCliStartupError(
+              `Copilot CLI exited during ACP ${phase}${code !== null ? ` with code ${code}` : signal ? ` (${signal})` : ""}.`,
+              getStderr()
+            )
+          )
+        );
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(new Error(this.formatCliStartupError(error.message, getStderr())));
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        child.off("exit", onExit);
+        child.off("error", onError);
+      };
+
+      child.on("exit", onExit);
+      child.on("error", onError);
+
+      operation
+        .then((result) => {
+          cleanup();
+          resolve(result);
+        })
+        .catch((error) => {
+          cleanup();
+          reject(
+            new Error(
+              this.formatCliStartupError(error instanceof Error ? error.message : String(error), getStderr())
+            )
+          );
+        });
     });
+  }
 
-    this.runtimes.set(thread.id, runtime);
-    await runtime.ready;
-    return runtime;
+  private formatCliStartupError(message: string, stderr: string): string {
+    const normalizedStderr = stderr.trim();
+    return normalizedStderr ? `${message}\n${normalizedStderr}` : message;
   }
 
   private async handlePermissionRequest(

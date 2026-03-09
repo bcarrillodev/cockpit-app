@@ -19,6 +19,7 @@ function defaultSettings(): SettingsRecord {
   return {
     cliExecutablePath: null,
     selectedProjectId: null,
+    defaultModelId: null,
     hiddenProjectIds: []
   };
 }
@@ -27,6 +28,7 @@ function normalizeSettings(settings: Partial<SettingsRecord> | null | undefined)
   return {
     ...defaultSettings(),
     ...settings,
+    defaultModelId: typeof settings?.defaultModelId === "string" ? settings.defaultModelId : null,
     hiddenProjectIds: Array.isArray(settings?.hiddenProjectIds) ? settings.hiddenProjectIds : []
   };
 }
@@ -226,9 +228,10 @@ export class AppStore {
     return threads.find((thread) => thread.id === threadId) ?? null;
   }
 
-  async createThread(projectId: string, modelId = "gpt-5"): Promise<ThreadRecord> {
+  async createThread(projectId: string, modelId?: string): Promise<ThreadRecord> {
     const threads = await readJson(this.threadsFile);
-    const thread = createThreadRecord(projectId, modelId);
+    const settings = await this.getSettings();
+    const thread = createThreadRecord(projectId, modelId?.trim() || settings.defaultModelId || "");
     threads.push(thread);
     await writeJson(this.threadsFile, threads);
     return thread;

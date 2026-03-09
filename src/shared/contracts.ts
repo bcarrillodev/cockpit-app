@@ -97,6 +97,7 @@ export interface ModelDiscoveryResult {
 export interface SettingsRecord {
   cliExecutablePath: string | null;
   selectedProjectId: string | null;
+  defaultModelId: string | null;
   hiddenProjectIds: string[];
 }
 
@@ -209,7 +210,7 @@ export interface CockpitApi {
   };
   threads: {
     list: (projectId?: string) => Promise<ThreadRecord[]>;
-    create: (projectId: string) => Promise<ThreadRecord>;
+    create: (projectId: string, modelId?: string) => Promise<ThreadRecord>;
     rename: (threadId: string, title: string) => Promise<ThreadRecord>;
     delete: (threadId: string) => Promise<void>;
     open: (threadId: string) => Promise<ThreadOpenPayload>;

@@ -72,7 +72,10 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.threadsList, async (_event, projectId?: string) => store.getThreads(projectId));
-  ipcMain.handle(IPC_CHANNELS.threadsCreate, async (_event, projectId: string) => store.createThread(projectId));
+  ipcMain.handle(IPC_CHANNELS.threadsCreate, async (_event, projectId: string, modelId?: string) => {
+    const thread = await store.createThread(projectId, modelId);
+    return chatManager.prepareThread(thread.id);
+  });
   ipcMain.handle(
     IPC_CHANNELS.threadsRename,
     async (_event, threadId: string, title: string) => store.updateThread(threadId, { title })
@@ -81,11 +84,15 @@ function registerIpc(): void {
     await chatManager.restartThreadRuntime(threadId);
     await store.deleteThread(threadId);
   });
-  ipcMain.handle(IPC_CHANNELS.threadsOpen, async (_event, threadId: string) => store.openThread(threadId));
+  ipcMain.handle(IPC_CHANNELS.threadsOpen, async (_event, threadId: string) => {
+    await chatManager.prepareThread(threadId);
+    return store.openThread(threadId);
+  });
   ipcMain.handle(
     IPC_CHANNELS.threadsUpdateModel,
     async (_event, threadId: string, modelId: string) => {
       const thread = await store.updateThread(threadId, { modelId });
+      await store.updateSettings({ defaultModelId: modelId });
       await chatManager.restartThreadRuntime(threadId);
       return thread;
     }

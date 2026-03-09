@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useCockpitStore } from "./stores/cockpit";
-import type { ThreadRecord } from "../shared/contracts";
+import type { MessageRecord, ThreadRecord } from "../shared/contracts";
 
 const store = useCockpitStore();
 const {
@@ -11,9 +11,8 @@ const {
   activeThreadId,
   selectedProject,
   activeThread,
-  transcriptMessages,
+  transcriptTimeline,
   pendingPermissions,
-  activeToolCalls,
   activePlan,
   cliHealth,
   gitStatus,
@@ -40,14 +39,27 @@ const emptyCards = [
 const hasProjects = computed(() => projectThreadGroups.value.length > 0);
 const deleteThreadTarget = ref<ThreadRecord | null>(null);
 const collapsedProjects = ref<Record<string, boolean>>({});
+const transcriptTail = ref<HTMLElement | null>(null);
 
 const canSend = computed(() => {
-  return Boolean(activeThread.value) && Boolean(composer.value.trim()) && activeThread.value?.status !== "running";
+  return Boolean(selectedProject.value) && Boolean(composer.value.trim()) && activeThread.value?.status !== "running";
 });
 
 const modelOptions = computed(() => models.value?.models ?? []);
+
+function isAvailableModel(modelId: string | null | undefined): modelId is string {
+  return Boolean(modelId) && modelOptions.value.some((model) => model.modelId === modelId);
+}
+
 const modelSelection = computed({
-  get: () => activeThread.value?.modelId ?? models.value?.currentModelId ?? "",
+  get: () => {
+    const threadModelId = activeThread.value?.modelId;
+    if (isAvailableModel(threadModelId)) {
+      return threadModelId;
+    }
+
+    return models.value?.currentModelId ?? threadModelId ?? "";
+  },
   set: async (value: string) => {
     if (!value || value === activeThread.value?.modelId) {
       return;
@@ -114,6 +126,34 @@ function relativeTime(value: string | null): string {
   return `${days}d`;
 }
 
+function messageLabel(item: Pick<MessageRecord, "kind" | "role">): string {
+  if (item.kind === "thought") {
+    return "Reasoning";
+  }
+
+  if (item.role === "assistant") {
+    return "Response";
+  }
+
+  return item.role;
+}
+
+function messageShellClass(item: Pick<MessageRecord, "kind" | "role">): string {
+  if (item.kind === "thought") {
+    return "message-reasoning";
+  }
+
+  if (item.role === "assistant") {
+    return "message-response";
+  }
+
+  if (item.role === "system") {
+    return "message-system";
+  }
+
+  return "message-user";
+}
+
 function requestThreadDelete(thread: ThreadRecord): void {
   deleteThreadTarget.value = thread;
 }
@@ -154,6 +194,24 @@ async function confirmThreadDelete(): Promise<void> {
   await store.deleteThread(threadId);
 }
 
+watch(
+  () =>
+    transcriptTimeline.value.map((item) =>
+      item.itemType === "message"
+        ? `${item.id}:${item.content.length}:${item.createdAt}`
+        : `${item.id}:${item.status ?? ""}:${item.content.length}:${item.updatedAt}`
+    ),
+  async () => {
+    await nextTick();
+    if (typeof transcriptTail.value?.scrollIntoView === "function") {
+      transcriptTail.value.scrollIntoView({ block: "end" });
+    }
+  },
+  {
+    flush: "post"
+  }
+);
+
 onMounted(async () => {
   await store.bootstrap();
   cliExecutableDraft.value = store.settings.cliExecutablePath ?? "";
@@ -163,13 +221,13 @@ onMounted(async () => {
 <template>
   <div class="cockpit-theme-dark h-screen overflow-hidden bg-[radial-gradient(circle_at_top,#19151f,transparent_38%),linear-gradient(180deg,#09090b_0%,#050507_100%)] text-zinc-100">
     <div class="flex h-full">
-      <aside class="sidebar-shell hidden w-[360px] shrink-0 border-r border-white/8 xl:flex">
-        <div class="flex h-full flex-col">
+      <aside class="sidebar-shell hidden w-[360px] shrink-0 overflow-hidden border-r border-white/8 xl:flex">
+        <div class="flex h-full min-w-0 flex-col">
           <div class="px-8 pt-12">
             <div class="window-badge">Cockpit</div>
           </div>
 
-          <div class="min-h-0 flex-1 px-6 pb-4 pt-10">
+          <div class="min-h-0 min-w-0 flex-1 px-6 pb-4 pt-10">
             <div class="mb-4 flex items-center justify-between px-2">
               <span class="section-label">Threads</span>
               <button class="sidebar-inline-action" type="button" @click="store.addProject()">
@@ -247,9 +305,8 @@ onMounted(async () => {
                         />
                         <div class="min-w-0 flex-1">
                           <div class="truncate font-medium text-white">{{ thread.title }}</div>
-                          <div class="mt-1 truncate text-sm text-zinc-400">{{ thread.summary || "No transcript yet." }}</div>
                         </div>
-                        <div class="text-xs text-zinc-500">{{ relativeTime(thread.lastMessageAt ?? thread.createdAt) }}</div>
+                        <div class="thread-item-time text-xs text-zinc-500">{{ relativeTime(thread.lastMessageAt ?? thread.createdAt) }}</div>
                       </div>
                     </button>
                     <button
@@ -332,7 +389,7 @@ onMounted(async () => {
             </div>
           </PMessage>
 
-          <div class="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div v-if="pendingPermissions.length || activePlan.length" class="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div class="space-y-3">
               <section
                 v-for="permission in pendingPermissions"
@@ -371,24 +428,12 @@ onMounted(async () => {
                 </div>
               </section>
 
-              <section v-if="activeToolCalls.length" class="glass-panel rounded-3xl p-4">
-                <div class="section-label">Tool Calls</div>
-                <div class="mt-4 space-y-3">
-                  <div v-for="tool in activeToolCalls.slice(0, 4)" :key="tool.toolCallId" class="rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div class="flex items-center justify-between gap-2">
-                      <div class="truncate text-sm font-medium text-white">{{ tool.title }}</div>
-                      <PTag :value="tool.status ?? 'pending'" severity="contrast" />
-                    </div>
-                    <div class="mt-2 line-clamp-3 text-xs text-zinc-400">{{ tool.content || tool.locations.join(', ') }}</div>
-                  </div>
-                </div>
-              </section>
             </aside>
           </div>
 
           <div class="min-h-0 flex-1 overflow-y-auto pr-1">
             <div
-              v-if="!transcriptMessages.length && !booting"
+              v-if="!transcriptTimeline.length && !booting"
               class="hero-shell mx-auto flex min-h-full max-w-4xl flex-col items-center justify-center gap-10 pb-10 pt-12 text-center"
             >
               <div class="hero-mark">
@@ -413,25 +458,40 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div v-else class="mx-auto flex max-w-4xl flex-col gap-5 pb-10 pt-6">
-              <article
-                v-for="message in transcriptMessages"
-                :key="message.id"
-                class="message-shell"
-                :class="{
-                  'message-user': message.role === 'user',
-                  'message-assistant': message.role === 'assistant',
-                  'message-system': message.role === 'system'
-                }"
-              >
-                <div class="mb-2 flex items-center justify-between gap-4">
-                  <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">
-                    {{ message.kind === 'thought' ? 'Reasoning' : message.role }}
+            <div v-else class="transcript-stack mx-auto flex max-w-4xl flex-col gap-5 pb-10 pt-6">
+              <template v-for="item in transcriptTimeline" :key="item.id">
+                <article
+                  v-if="item.itemType === 'message'"
+                  class="message-shell"
+                  :class="messageShellClass(item)"
+                >
+                  <div class="mb-2 flex items-center justify-between gap-4">
+                    <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">
+                      {{ messageLabel(item) }}
+                    </div>
+                    <div class="text-xs text-zinc-500">{{ relativeTime(item.createdAt) }}</div>
                   </div>
-                  <div class="text-xs text-zinc-500">{{ relativeTime(message.createdAt) }}</div>
-                </div>
-                <div class="whitespace-pre-wrap text-[15px] leading-7 text-zinc-100">{{ message.content }}</div>
-              </article>
+                  <div class="whitespace-pre-wrap text-[15px] leading-7 text-zinc-100">{{ item.content }}</div>
+                </article>
+
+                <article v-else class="tool-call-shell">
+                  <div class="mb-3 flex items-center justify-between gap-4">
+                    <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">Tool call</div>
+                    <div class="flex items-center gap-3">
+                      <div class="text-xs text-zinc-500">{{ relativeTime(item.updatedAt) }}</div>
+                      <PTag :value="item.status ?? 'pending'" severity="contrast" />
+                    </div>
+                  </div>
+                  <div class="text-sm font-medium text-white">{{ item.title }}</div>
+                  <div v-if="item.content" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
+                    {{ item.content }}
+                  </div>
+                  <div v-else-if="item.locations.length" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-400">
+                    {{ item.locations.join('\n') }}
+                  </div>
+                </article>
+              </template>
+              <div ref="transcriptTail" class="h-px w-full" aria-hidden="true" />
             </div>
           </div>
 
@@ -453,7 +513,7 @@ onMounted(async () => {
                     :options="modelOptions"
                     optionLabel="name"
                     optionValue="modelId"
-                    :disabled="!activeThread || activeThread.status === 'running' || !modelOptions.length"
+                    :disabled="!selectedProject || activeThread?.status === 'running' || !modelOptions.length"
                     placeholder="Model"
                     fluid
                   />

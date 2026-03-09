@@ -29,6 +29,108 @@ type DraftAssistantMessage = {
   createdAt: string;
 };
 
+type ToolCallTimelineRecord = ToolCallRecord & {
+  firstSeenAt: string;
+  lastUpdatedAt: string;
+};
+
+type TranscriptTimelineItem =
+  | (MessageRecord & { itemType: "message"; sortAt: string })
+  | {
+      itemType: "tool-call";
+      id: string;
+      threadId: string;
+      title: string;
+      kind: string | null;
+      status: string | null;
+      content: string;
+      locations: string[];
+      createdAt: string;
+      updatedAt: string;
+      sortAt: string;
+    };
+
+type RankedTranscriptTimelineItem = TranscriptTimelineItem & {
+  phaseRank: number;
+  turnRank: number;
+  turnStartedAt: string;
+};
+
+function transcriptPhaseRank(item: TranscriptTimelineItem): number {
+  if (item.itemType === "tool-call") {
+    return 2;
+  }
+
+  if (item.role === "user") {
+    return 0;
+  }
+
+  if (item.kind === "thought") {
+    return 1;
+  }
+
+  if (item.role === "assistant") {
+    return 3;
+  }
+
+  return 4;
+}
+
+function sortTranscriptTimeline(items: TranscriptTimelineItem[]): TranscriptTimelineItem[] {
+  const chronological = [...items].sort((a, b) => {
+    const sortComparison = a.sortAt.localeCompare(b.sortAt);
+    if (sortComparison !== 0) {
+      return sortComparison;
+    }
+
+    if (a.itemType === b.itemType) {
+      return a.id.localeCompare(b.id);
+    }
+
+    return a.itemType === "message" ? -1 : 1;
+  });
+
+  let currentTurnRank = -1;
+  let currentTurnStartedAt = "";
+
+  const rankedItems: RankedTranscriptTimelineItem[] = chronological.map((item) => {
+    if (item.itemType === "message" && item.role === "user") {
+      currentTurnRank += 1;
+      currentTurnStartedAt = item.createdAt;
+    }
+
+    return {
+      ...item,
+      phaseRank: transcriptPhaseRank(item),
+      turnRank: currentTurnRank,
+      turnStartedAt: currentTurnRank >= 0 ? currentTurnStartedAt : item.sortAt
+    };
+  });
+
+  return rankedItems.sort((a, b) => {
+    const turnComparison = a.turnStartedAt.localeCompare(b.turnStartedAt);
+    if (turnComparison !== 0) {
+      return turnComparison;
+    }
+
+    const phaseComparison = a.phaseRank - b.phaseRank;
+    if (phaseComparison !== 0) {
+      return phaseComparison;
+    }
+
+    const sortComparison = a.sortAt.localeCompare(b.sortAt);
+    if (sortComparison !== 0) {
+      return sortComparison;
+    }
+
+    if (a.itemType === b.itemType) {
+      return a.id.localeCompare(b.id);
+    }
+
+    return a.itemType === "message" ? -1 : 1;
+  });
+}
+
 function emptyGitStatus(): GitStatus {
   return {
     branch: null,
@@ -69,12 +171,13 @@ export const useCockpitStore = defineStore("cockpit", () => {
   const messagesByThread = ref<Record<string, MessageRecord[]>>({});
   const draftsByThread = ref<Record<string, Record<string, DraftAssistantMessage>>>({});
   const permissionsByThread = ref<Record<string, PermissionRequestRecord[]>>({});
-  const toolCallsByThread = ref<Record<string, ToolCallRecord[]>>({});
+  const toolCallsByThread = ref<Record<string, ToolCallTimelineRecord[]>>({});
   const plansByThread = ref<Record<string, PlanEntryRecord[]>>({});
   const cliHealth = ref<CliHealth | null>(null);
   const settings = ref<SettingsRecord>({
     cliExecutablePath: null,
     selectedProjectId: null,
+    defaultModelId: null,
     hiddenProjectIds: []
   });
   const gitStatus = ref<GitStatus>(emptyGitStatus());
@@ -122,6 +225,33 @@ export const useCockpitStore = defineStore("cockpit", () => {
     return [...stored, ...drafts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   });
 
+  const transcriptTimeline = computed<TranscriptTimelineItem[]>(() => {
+    if (!activeThreadId.value) {
+      return [];
+    }
+
+    const messages = transcriptMessages.value.map((message) => ({
+      ...message,
+      itemType: "message" as const,
+      sortAt: message.createdAt
+    }));
+    const toolCalls = (toolCallsByThread.value[activeThreadId.value] ?? []).map((toolCall) => ({
+      itemType: "tool-call" as const,
+      id: toolCall.toolCallId,
+      threadId: activeThreadId.value as string,
+      title: toolCall.title,
+      kind: toolCall.kind,
+      status: toolCall.status,
+      content: toolCall.content,
+      locations: toolCall.locations,
+      createdAt: toolCall.firstSeenAt,
+      updatedAt: toolCall.lastUpdatedAt,
+      sortAt: toolCall.firstSeenAt
+    }));
+
+    return sortTranscriptTimeline([...messages, ...toolCalls]);
+  });
+
   const pendingPermissions = computed(() => {
     if (!activeThreadId.value) {
       return [];
@@ -137,7 +267,9 @@ export const useCockpitStore = defineStore("cockpit", () => {
       return [];
     }
 
-    return toolCallsByThread.value[activeThreadId.value] ?? [];
+    return (toolCallsByThread.value[activeThreadId.value] ?? []).map(
+      ({ firstSeenAt: _firstSeenAt, lastUpdatedAt: _lastUpdatedAt, ...toolCall }) => toolCall
+    );
   });
 
   const activePlan = computed(() => {
@@ -247,11 +379,24 @@ export const useCockpitStore = defineStore("cockpit", () => {
       case "tool-updated": {
         const list = toolCallsByThread.value[event.threadId] ?? [];
         const index = list.findIndex((item) => item.toolCallId === event.toolCall.toolCallId);
+        const now = new Date().toISOString();
         if (index >= 0) {
-          list[index] = event.toolCall;
-          toolCallsByThread.value[event.threadId] = [...list];
+          const existing = list[index];
+          list[index] = {
+            ...event.toolCall,
+            firstSeenAt: existing.firstSeenAt,
+            lastUpdatedAt: now
+          };
+          toolCallsByThread.value[event.threadId] = [...list].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
         } else {
-          toolCallsByThread.value[event.threadId] = [event.toolCall, ...list];
+          toolCallsByThread.value[event.threadId] = [
+            ...list,
+            {
+              ...event.toolCall,
+              firstSeenAt: now,
+              lastUpdatedAt: now
+            }
+          ].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
         }
         break;
       }
@@ -441,7 +586,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
     }
   }
 
-  async function createThread(projectId = selectedProjectId.value): Promise<void> {
+  async function createThread(projectId = selectedProjectId.value, modelId?: string): Promise<void> {
     errorMessage.value = null;
     try {
       if (!projectId) {
@@ -459,7 +604,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
         await selectProjectContext(projectId);
       }
 
-      const thread = await cockpitApi().threads.create(projectId);
+      const thread = await cockpitApi().threads.create(projectId, modelId?.trim() || undefined);
       upsertThread(thread);
       await openThread(thread.id);
     } catch (error) {
@@ -529,7 +674,19 @@ export const useCockpitStore = defineStore("cockpit", () => {
   }
 
   async function sendPrompt(content: string): Promise<void> {
-    if (!activeThreadId.value || !content.trim()) {
+    if (!content.trim()) {
+      return;
+    }
+
+    if (!activeThreadId.value) {
+      if (!selectedProjectId.value) {
+        return;
+      }
+
+      await createThread(selectedProjectId.value, settings.value.defaultModelId ?? undefined);
+    }
+
+    if (!activeThreadId.value) {
       return;
     }
 
@@ -575,7 +732,25 @@ export const useCockpitStore = defineStore("cockpit", () => {
   }
 
   async function updateThreadModel(modelId: string): Promise<void> {
+    settings.value = {
+      ...settings.value,
+      defaultModelId: modelId
+    };
+
     if (!activeThreadId.value) {
+      if (!selectedProjectId.value) {
+        return;
+      }
+
+      await createThread(selectedProjectId.value, modelId);
+    }
+
+    if (!activeThreadId.value) {
+      return;
+    }
+
+    if (activeThread.value?.modelId === modelId) {
+      models.value = await cockpitApi().chat.getModels(activeThreadId.value);
       return;
     }
 
@@ -635,6 +810,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
     projectThreadGroups,
     activeThread,
     transcriptMessages,
+    transcriptTimeline,
     pendingPermissions,
     activeToolCalls,
     activePlan,

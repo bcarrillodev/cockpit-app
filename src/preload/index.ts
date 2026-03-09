@@ -16,7 +16,7 @@ const api: CockpitApi = {
   },
   threads: {
     list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.threadsList, projectId),
-    create: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.threadsCreate, projectId),
+    create: (projectId, modelId) => ipcRenderer.invoke(IPC_CHANNELS.threadsCreate, projectId, modelId),
     rename: (threadId, title) => ipcRenderer.invoke(IPC_CHANNELS.threadsRename, threadId, title),
     delete: (threadId) => ipcRenderer.invoke(IPC_CHANNELS.threadsDelete, threadId),
     open: (threadId) => ipcRenderer.invoke(IPC_CHANNELS.threadsOpen, threadId),

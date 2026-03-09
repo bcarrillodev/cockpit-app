@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import type { ProjectRecord, ThreadOpenPayload, ThreadRecord } from "../src/shared/contracts";
+import type { ChatEvent, ProjectRecord, ThreadOpenPayload, ThreadRecord } from "../src/shared/contracts";
 import { useCockpitStore } from "../src/renderer/stores/cockpit";
 
 function makeProject(id: string, name: string, rootPath = `/tmp/${name}`): ProjectRecord {
@@ -104,6 +104,7 @@ function installCockpitApi(overrides: Partial<typeof window.cockpit> = {}): void
       get: vi.fn().mockResolvedValue({
         cliExecutablePath: null,
         selectedProjectId: null,
+        defaultModelId: null,
         hiddenProjectIds: []
       }),
       update: vi.fn()
@@ -124,6 +125,7 @@ describe("cockpit renderer store", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -165,7 +167,7 @@ describe("cockpit renderer store", () => {
 
     expect(window.cockpit.system.pickProjectDirectory).toHaveBeenCalledTimes(1);
     expect(window.cockpit.projects.create).toHaveBeenCalledWith(project.rootPath);
-    expect(window.cockpit.threads.create).toHaveBeenCalledWith(project.id);
+    expect(window.cockpit.threads.create).toHaveBeenCalledWith(project.id, undefined);
     expect(store.selectedProjectId).toBe(project.id);
     expect(store.activeThreadId).toBe(thread.id);
     expect(store.errorMessage).toBeNull();
@@ -224,6 +226,7 @@ describe("cockpit renderer store", () => {
         get: vi.fn().mockResolvedValue({
           cliExecutablePath: null,
           selectedProjectId: projectA.id,
+          defaultModelId: null,
           hiddenProjectIds: []
         }),
         update: vi.fn()
@@ -282,6 +285,7 @@ describe("cockpit renderer store", () => {
         get: vi.fn().mockResolvedValue({
           cliExecutablePath: null,
           selectedProjectId: projectA.id,
+          defaultModelId: null,
           hiddenProjectIds: []
         }),
         update: vi.fn()
@@ -326,6 +330,7 @@ describe("cockpit renderer store", () => {
         get: vi.fn().mockResolvedValue({
           cliExecutablePath: null,
           selectedProjectId: projectA.id,
+          defaultModelId: null,
           hiddenProjectIds: []
         }),
         update: vi.fn()
@@ -337,7 +342,7 @@ describe("cockpit renderer store", () => {
     await store.bootstrap();
     await store.createThread(projectB.id);
 
-    expect(window.cockpit.threads.create).toHaveBeenCalledWith(projectB.id);
+    expect(window.cockpit.threads.create).toHaveBeenCalledWith(projectB.id, undefined);
     expect(window.cockpit.projects.select).toHaveBeenLastCalledWith(projectB.id);
     expect(store.selectedProjectId).toBe(projectB.id);
     expect(store.activeThreadId).toBe(newThreadB.id);
@@ -371,6 +376,7 @@ describe("cockpit renderer store", () => {
         get: vi.fn().mockResolvedValue({
           cliExecutablePath: null,
           selectedProjectId: projectA.id,
+          defaultModelId: null,
           hiddenProjectIds: []
         }),
         update: vi.fn()
@@ -398,6 +404,7 @@ describe("cockpit renderer store", () => {
     let currentSettings = {
       cliExecutablePath: null,
       selectedProjectId: projectA.id,
+      defaultModelId: null,
       hiddenProjectIds: []
     };
     const listProjects = vi.fn().mockImplementation(async () => currentProjects);
@@ -492,6 +499,7 @@ describe("cockpit renderer store", () => {
         get: vi.fn().mockResolvedValue({
           cliExecutablePath: null,
           selectedProjectId: project.id,
+          defaultModelId: null,
           hiddenProjectIds: []
         }),
         update: vi.fn()
@@ -506,5 +514,387 @@ describe("cockpit renderer store", () => {
     expect(store.selectedProjectId).toBe(project.id);
     expect(store.activeThreadId).toBeNull();
     expect(getModels).toHaveBeenLastCalledWith(null);
+  });
+
+  it("creates a thread before applying a model when no thread is active", async () => {
+    const project = makeProject("project-a", "alpha");
+    const createdThread = makeThread("thread-a-1", project.id, "2026-03-08T10:02:00.000Z");
+    const createdThreadWithModel = {
+      ...createdThread,
+      modelId: "gpt-5.4"
+    };
+    const getModels = vi.fn()
+      .mockResolvedValueOnce({
+        models: [
+          { modelId: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+          { modelId: "gpt-5.4", name: "GPT-5.4" }
+        ],
+        currentModelId: "claude-sonnet-4.6",
+        discoveredAt: "2026-03-08T00:00:00.000Z",
+        source: "session"
+      })
+      .mockResolvedValueOnce({
+        models: [
+          { modelId: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+          { modelId: "gpt-5.4", name: "GPT-5.4" }
+        ],
+        currentModelId: "gpt-5.4",
+        discoveredAt: "2026-03-08T00:00:00.000Z",
+        source: "cache"
+      });
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue(createdThreadWithModel),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue(openPayload(createdThreadWithModel)),
+        updateModel: vi.fn()
+      },
+      chat: {
+        send: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        retry: vi.fn().mockResolvedValue(undefined),
+        resolvePermission: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => undefined),
+        getModels,
+        refreshModels: vi.fn().mockResolvedValue({
+          models: [
+            { modelId: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
+            { modelId: "gpt-5.4", name: "GPT-5.4" }
+          ],
+          currentModelId: "claude-sonnet-4.6",
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "session"
+        })
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const store = useCockpitStore();
+
+    await store.bootstrap();
+    await store.updateThreadModel("gpt-5.4");
+
+    expect(window.cockpit.threads.create).toHaveBeenCalledWith(project.id, "gpt-5.4");
+    expect(window.cockpit.threads.updateModel).not.toHaveBeenCalled();
+    expect(store.activeThreadId).toBe(createdThread.id);
+    expect(store.activeThread?.modelId).toBe("gpt-5.4");
+    expect(store.settings.defaultModelId).toBe("gpt-5.4");
+  });
+
+  it("creates a thread before sending the first prompt when no thread is active", async () => {
+    const project = makeProject("project-a", "alpha");
+    const createdThread = makeThread("thread-a-1", project.id, "2026-03-08T10:02:00.000Z");
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue(createdThread),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue(openPayload(createdThread)),
+        updateModel: vi.fn()
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const store = useCockpitStore();
+
+    await store.bootstrap();
+    await store.sendPrompt("Write a changelog");
+
+    expect(window.cockpit.threads.create).toHaveBeenCalledWith(project.id, undefined);
+    expect(window.cockpit.chat.send).toHaveBeenCalledWith({
+      threadId: createdThread.id,
+      content: "Write a changelog"
+    });
+    expect(store.activeThreadId).toBe(createdThread.id);
+  });
+
+  it("builds a single transcript timeline with tool calls in first-seen order", async () => {
+    vi.useFakeTimers();
+    const project = makeProject("project-a", "alpha");
+    const thread = makeThread("thread-a", project.id, "2026-03-08T10:00:00.000Z");
+    let listener: ((event: ChatEvent) => void) | null = null;
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([thread]),
+        create: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue(openPayload(thread)),
+        updateModel: vi.fn()
+      },
+      chat: {
+        send: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        retry: vi.fn().mockResolvedValue(undefined),
+        resolvePermission: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockImplementation((callback: (event: ChatEvent) => void) => {
+          listener = callback;
+          return () => undefined;
+        }),
+        getModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        }),
+        refreshModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        })
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const store = useCockpitStore();
+
+    await store.bootstrap();
+
+    expect(listener).not.toBeNull();
+    const emitChatEvent = (event: ChatEvent): void => {
+      if (!listener) {
+        throw new Error("Chat listener was not registered.");
+      }
+
+      listener(event);
+    };
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:00.000Z"));
+    emitChatEvent({
+      type: "message-created",
+      threadId: thread.id,
+      message: {
+        id: "user-1",
+        threadId: thread.id,
+        role: "user",
+        content: "Describe this project",
+        createdAt: "2026-03-08T10:00:00.000Z",
+        kind: "message"
+      }
+    });
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:10.000Z"));
+    emitChatEvent({
+      type: "tool-updated",
+      threadId: thread.id,
+      toolCall: {
+        toolCallId: "tool-1",
+        title: "Viewing README.md",
+        kind: "tool",
+        status: "running",
+        content: "",
+        locations: ["/tmp/repo/README.md"]
+      }
+    });
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:20.000Z"));
+    emitChatEvent({
+      type: "tool-updated",
+      threadId: thread.id,
+      toolCall: {
+        toolCallId: "tool-1",
+        title: "Viewing README.md",
+        kind: "tool",
+        status: "completed",
+        content: "",
+        locations: ["/tmp/repo/README.md"]
+      }
+    });
+
+    emitChatEvent({
+      type: "message-created",
+      threadId: thread.id,
+      message: {
+        id: "assistant-1",
+        threadId: thread.id,
+        role: "assistant",
+        content: "It is an Electron app.",
+        createdAt: "2026-03-08T10:00:30.000Z",
+        kind: "message"
+      }
+    });
+
+    expect(store.transcriptTimeline.map((item) => `${item.itemType}:${item.id}`)).toEqual([
+      "message:user-1",
+      "tool-call:tool-1",
+      "message:assistant-1"
+    ]);
+    expect(store.transcriptTimeline[1]).toMatchObject({
+      itemType: "tool-call",
+      id: "tool-1",
+      status: "completed",
+      createdAt: "2026-03-08T10:00:10.000Z",
+      updatedAt: "2026-03-08T10:00:20.000Z"
+    });
+  });
+
+  it("orders each prompt turn as reasoning, then tool calls, then response", async () => {
+    vi.useFakeTimers();
+    const project = makeProject("project-a", "alpha");
+    const thread = makeThread("thread-a", project.id, "2026-03-08T10:00:00.000Z");
+    let listener: ((event: ChatEvent) => void) | null = null;
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([thread]),
+        create: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue(openPayload(thread)),
+        updateModel: vi.fn()
+      },
+      chat: {
+        send: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        retry: vi.fn().mockResolvedValue(undefined),
+        resolvePermission: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockImplementation((callback: (event: ChatEvent) => void) => {
+          listener = callback;
+          return () => undefined;
+        }),
+        getModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        }),
+        refreshModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        })
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const store = useCockpitStore();
+
+    await store.bootstrap();
+
+    expect(listener).not.toBeNull();
+    const emitChatEvent = (event: ChatEvent): void => {
+      if (!listener) {
+        throw new Error("Chat listener was not registered.");
+      }
+
+      listener(event);
+    };
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:00.000Z"));
+    emitChatEvent({
+      type: "message-created",
+      threadId: thread.id,
+      message: {
+        id: "user-1",
+        threadId: thread.id,
+        role: "user",
+        content: "Describe this project",
+        createdAt: "2026-03-08T10:00:00.000Z",
+        kind: "message"
+      }
+    });
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:20.000Z"));
+    emitChatEvent({
+      type: "tool-updated",
+      threadId: thread.id,
+      toolCall: {
+        toolCallId: "tool-1",
+        title: "Viewing README.md",
+        kind: "tool",
+        status: "completed",
+        content: "",
+        locations: ["/tmp/repo/README.md"]
+      }
+    });
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:25.000Z"));
+    emitChatEvent({
+      type: "assistant-delta",
+      threadId: thread.id,
+      messageId: "assistant-1",
+      content: "It is an Electron app.",
+      kind: "message"
+    });
+
+    vi.setSystemTime(new Date("2026-03-08T10:00:30.000Z"));
+    emitChatEvent({
+      type: "assistant-delta",
+      threadId: thread.id,
+      messageId: "thought-1",
+      content: "Checking the repo structure first.",
+      kind: "thought"
+    });
+
+    expect(store.transcriptTimeline.map((item) => `${item.itemType}:${item.id}`)).toEqual([
+      "message:user-1",
+      "message:thought-1",
+      "tool-call:tool-1",
+      "message:assistant-1"
+    ]);
   });
 });

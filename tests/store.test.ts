@@ -66,6 +66,7 @@ describe("AppStore", () => {
 
       await store.updateSettings({
         selectedProjectId: projectA.id,
+        defaultModelId: null,
         hiddenProjectIds: [projectA.id]
       });
       await store.removeProject(projectA.id);
@@ -81,8 +82,29 @@ describe("AppStore", () => {
       expect(await reopened.getSettings()).toEqual({
         cliExecutablePath: null,
         selectedProjectId: projectB.id,
+        defaultModelId: null,
         hiddenProjectIds: []
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the saved default model for newly created threads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cockpit-store-"));
+
+    try {
+      const store = new AppStore(root);
+      await store.init();
+
+      const project = await store.createProject("/tmp/example-repo");
+      await store.updateSettings({
+        defaultModelId: "gpt-5.4"
+      });
+
+      const thread = await store.createThread(project.id);
+
+      expect(thread.modelId).toBe("gpt-5.4");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import type { ModelDiscoveryResult, ModelRecord } from "./contracts";
 
 const MODEL_LINE_PATTERNS = [
+  /^\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|/i,
   /`([^`]+)`\s*[-:]\s*(.+)$/i,
   /^\s*[-*]\s*`([^`]+)`\s*[-:]\s*(.+)$/i,
   /^\s*[-*]\s*([a-z0-9][a-z0-9._-]+)\s*[-:]\s*(.+)$/i,
@@ -23,8 +24,8 @@ export function parseDiscoveredModels(raw: string): ModelRecord[] {
         continue;
       }
 
-      const modelId = match[1]?.trim();
-      const name = match[2]?.trim() || modelId;
+      const modelId = pattern === MODEL_LINE_PATTERNS[0] ? match[2]?.trim() : match[1]?.trim();
+      const name = (pattern === MODEL_LINE_PATTERNS[0] ? match[1] : match[2])?.trim() || modelId;
 
       if (modelId) {
         models.set(modelId, { modelId, name });
