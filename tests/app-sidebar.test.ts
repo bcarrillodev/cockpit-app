@@ -41,7 +41,8 @@ function openPayload(thread: ThreadRecord): ThreadOpenPayload {
   return {
     thread,
     messages: [],
-    permissions: []
+    permissions: [],
+    toolCalls: []
   };
 }
 
@@ -148,6 +149,16 @@ function installCockpitApi(overrides: Partial<typeof window.cockpit> = {}): void
   });
 }
 
+const pButtonStub = {
+  props: ["label"],
+  template: "<button><slot />{{ label }}</button>"
+};
+
+const pDialogStub = {
+  props: ["visible"],
+  template: "<div v-if=\"visible\"><slot /></div>"
+};
+
 describe("sidebar grouping", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -211,8 +222,8 @@ describe("sidebar grouping", () => {
       global: {
         plugins: [createPinia()],
         stubs: {
-          PButton: { template: "<button><slot /></button>" },
-          PDialog: { template: "<div><slot /></div>" },
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
           PDrawer: { template: "<div><slot /></div>" },
           PInputText: { template: "<input />" },
           PMessage: { template: "<div><slot /></div>" },
@@ -333,8 +344,8 @@ describe("sidebar grouping", () => {
       global: {
         plugins: [createPinia()],
         stubs: {
-          PButton: { template: "<button><slot /></button>" },
-          PDialog: { template: "<div><slot /></div>" },
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
           PDrawer: { template: "<div><slot /></div>" },
           PInputText: { template: "<input />" },
           PMessage: { template: "<div><slot /></div>" },
@@ -365,19 +376,51 @@ describe("sidebar grouping", () => {
         locations: ["/tmp/alpha/README.md"]
       }
     });
+    emitChatEvent({
+      type: "tool-updated",
+      threadId: thread.id,
+      toolCall: {
+        toolCallId: "tool-2",
+        title: "Read package.json",
+        kind: "tool",
+        status: "completed",
+        content: "Found Electron dependencies.",
+        locations: []
+      }
+    });
 
     await flushPromises();
 
     const transcript = wrapper.get(".transcript-stack").text();
 
     expect(wrapper.findAll(".message-shell")).toHaveLength(3);
-    expect(wrapper.findAll(".tool-call-shell")).toHaveLength(1);
+    expect(wrapper.findAll(".tool-call-group-shell")).toHaveLength(1);
+    expect(wrapper.findAll(".tool-call-entry")).toHaveLength(0);
     expect(transcript).toContain("Reasoning");
-    expect(transcript).toContain("Tool call");
+    expect(transcript).toContain("Tool calls");
+    expect(transcript).not.toContain("Open README.md");
+    expect(transcript).not.toContain("Read package.json");
+    expect(transcript).not.toContain("/tmp/alpha/README.md");
+    expect(transcript).not.toContain("Found Electron dependencies.");
     expect(transcript).toContain("Response");
     expect(transcript).not.toContain("assistant");
-    expect(transcript.indexOf("Reasoning")).toBeLessThan(transcript.indexOf("Tool call"));
-    expect(transcript.indexOf("Tool call")).toBeLessThan(transcript.indexOf("Response"));
+    expect(transcript.indexOf("Reasoning")).toBeLessThan(transcript.indexOf("Tool calls"));
+    expect(transcript.indexOf("Tool calls")).toBeLessThan(transcript.indexOf("Response"));
+    expect(wrapper.get(".tool-call-toggle").attributes("aria-expanded")).toBe("false");
+    expect(wrapper.get(".tool-call-toggle").text()).toBe("Expand");
+
+    await wrapper.get(".tool-call-toggle").trigger("click");
+    await flushPromises();
+
+    const expandedTranscript = wrapper.get(".transcript-stack").text();
+
+    expect(wrapper.get(".tool-call-toggle").attributes("aria-expanded")).toBe("true");
+    expect(wrapper.get(".tool-call-toggle").text()).toBe("Collapse");
+    expect(wrapper.findAll(".tool-call-entry")).toHaveLength(2);
+    expect(expandedTranscript).toContain("Open README.md");
+    expect(expandedTranscript).toContain("Read package.json");
+    expect(expandedTranscript).not.toContain("/tmp/alpha/README.md");
+    expect(expandedTranscript).not.toContain("Found Electron dependencies.");
 
   });
 
@@ -435,8 +478,8 @@ describe("sidebar grouping", () => {
       global: {
         plugins: [createPinia()],
         stubs: {
-          PButton: { template: "<button><slot /></button>" },
-          PDialog: { template: "<div><slot /></div>" },
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
           PDrawer: { template: "<div><slot /></div>" },
           PInputText: { template: "<input />" },
           PMessage: { template: "<div><slot /></div>" },
@@ -449,6 +492,12 @@ describe("sidebar grouping", () => {
 
     await flushPromises();
     await wrapper.find('button[aria-label="Remove project alpha"]').trigger("click");
+    await flushPromises();
+    expect(removeProject).not.toHaveBeenCalled();
+
+    const confirmDeleteProject = wrapper.findAll("button").find((button) => button.text() === "Delete project");
+    expect(confirmDeleteProject).toBeDefined();
+    await confirmDeleteProject!.trigger("click");
     await flushPromises();
 
     const text = wrapper.text();

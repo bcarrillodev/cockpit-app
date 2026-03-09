@@ -28,6 +28,16 @@ describe("AppStore", () => {
         title: "Describe this repo",
         summary: "user: Describe this repo."
       });
+      await store.upsertToolCall(thread.id, {
+        toolCallId: "tool-1",
+        title: "Open README.md",
+        kind: "tool",
+        status: "completed",
+        content: "",
+        locations: ["/tmp/example-repo/README.md"],
+        firstSeenAt: "2026-03-08T10:00:01.000Z",
+        lastUpdatedAt: "2026-03-08T10:00:02.000Z"
+      });
 
       const reopened = new AppStore(root);
       await reopened.init();
@@ -38,6 +48,14 @@ describe("AppStore", () => {
       expect(openedThread.thread.title).toBe("Describe this repo");
       expect(openedThread.messages).toHaveLength(1);
       expect(openedThread.messages[0]?.content).toBe("Describe this repo.");
+      expect(openedThread.toolCalls).toEqual([
+        expect.objectContaining({
+          toolCallId: "tool-1",
+          title: "Open README.md",
+          firstSeenAt: "2026-03-08T10:00:01.000Z",
+          lastUpdatedAt: "2026-03-08T10:00:02.000Z"
+        })
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

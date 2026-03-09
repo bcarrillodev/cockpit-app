@@ -288,7 +288,7 @@ code {
   width: 100%;
 }
 
-.tool-call-shell {
+.tool-call-group-shell {
   border-radius: 1.6rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
@@ -296,6 +296,35 @@ code {
     rgba(10, 10, 13, 0.72);
   padding: 1.1rem 1.2rem;
   box-shadow: 0 18px 55px rgba(0, 0, 0, 0.16);
+}
+
+.tool-call-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.85rem;
+}
+
+.tool-call-entry {
+  padding: 0.85rem 0;
+}
+
+.tool-call-entry + .tool-call-entry {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tool-call-toggle {
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fafafa;
 }
 
 .message-user {

@@ -2,7 +2,37 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useCockpitStore } from "./stores/cockpit";
-import type { MessageRecord, ThreadRecord } from "../shared/contracts";
+import type { MessageRecord, ProjectRecord, ThreadRecord } from "../shared/contracts";
+
+type TranscriptMessageItem = MessageRecord & {
+  itemType: "message";
+  sortAt: string;
+};
+
+type TranscriptToolCallItem = {
+  itemType: "tool-call";
+  id: string;
+  threadId: string;
+  title: string;
+  kind: string | null;
+  status: string | null;
+  content: string;
+  locations: string[];
+  createdAt: string;
+  updatedAt: string;
+  sortAt: string;
+};
+
+type TranscriptDisplayItem =
+  | TranscriptMessageItem
+  | {
+      itemType: "tool-call-group";
+      id: string;
+      count: number;
+      createdAt: string;
+      updatedAt: string;
+      calls: TranscriptToolCallItem[];
+    };
 
 const store = useCockpitStore();
 const {
@@ -37,9 +67,18 @@ const emptyCards = [
 ];
 
 const hasProjects = computed(() => projectThreadGroups.value.length > 0);
+const deleteProjectTarget = ref<ProjectRecord | null>(null);
 const deleteThreadTarget = ref<ThreadRecord | null>(null);
 const collapsedProjects = ref<Record<string, boolean>>({});
+const expandedToolCallGroups = ref<Record<string, boolean>>({});
 const transcriptTail = ref<HTMLElement | null>(null);
+const deleteProjectThreadCount = computed(() => {
+  if (!deleteProjectTarget.value) {
+    return 0;
+  }
+
+  return projectThreadGroups.value.find((group) => group.project.id === deleteProjectTarget.value?.id)?.threads.length ?? 0;
+});
 
 const canSend = computed(() => {
   return Boolean(selectedProject.value) && Boolean(composer.value.trim()) && activeThread.value?.status !== "running";
@@ -96,6 +135,41 @@ const projectSubtitle = computed(() => {
   }
 
   return selectedProject.value.rootPath;
+});
+
+const transcriptDisplayItems = computed<TranscriptDisplayItem[]>(() => {
+  const items: TranscriptDisplayItem[] = [];
+  let pendingToolCalls: TranscriptToolCallItem[] = [];
+
+  const flushToolCalls = () => {
+    if (!pendingToolCalls.length) {
+      return;
+    }
+
+    items.push({
+      itemType: "tool-call-group",
+      id: `tool-call-group:${pendingToolCalls[0].id}`,
+      count: pendingToolCalls.length,
+      createdAt: pendingToolCalls[0].createdAt,
+      updatedAt: pendingToolCalls[pendingToolCalls.length - 1].updatedAt,
+      calls: pendingToolCalls
+    });
+    pendingToolCalls = [];
+  };
+
+  for (const item of transcriptTimeline.value) {
+    if (item.itemType === "tool-call") {
+      pendingToolCalls.push(item);
+      continue;
+    }
+
+    flushToolCalls();
+    items.push(item);
+  }
+
+  flushToolCalls();
+
+  return items;
 });
 
 async function submitPrompt(nextPrompt?: string): Promise<void> {
@@ -158,6 +232,10 @@ function requestThreadDelete(thread: ThreadRecord): void {
   deleteThreadTarget.value = thread;
 }
 
+function requestProjectDelete(project: ProjectRecord): void {
+  deleteProjectTarget.value = project;
+}
+
 function projectThreadsVisible(projectId: string): boolean {
   return !collapsedProjects.value[projectId];
 }
@@ -170,17 +248,35 @@ function toggleProjectThreads(projectId: string): void {
   };
 }
 
-async function removeProject(projectId: string): Promise<void> {
-  await store.removeProject(projectId);
+function toolCallGroupExpanded(groupId: string): boolean {
+  return Boolean(expandedToolCallGroups.value[groupId]);
+}
+
+function toggleToolCallGroup(groupId: string): void {
+  const isExpanded = Boolean(expandedToolCallGroups.value[groupId]);
+  expandedToolCallGroups.value = {
+    ...expandedToolCallGroups.value,
+    [groupId]: !isExpanded
+  };
 }
 
 function closeDeleteThreadDialog(): void {
   deleteThreadTarget.value = null;
 }
 
+function closeDeleteProjectDialog(): void {
+  deleteProjectTarget.value = null;
+}
+
 function handleDeleteDialogVisibility(value: boolean): void {
   if (!value) {
     closeDeleteThreadDialog();
+  }
+}
+
+function handleDeleteProjectDialogVisibility(value: boolean): void {
+  if (!value) {
+    closeDeleteProjectDialog();
   }
 }
 
@@ -192,6 +288,16 @@ async function confirmThreadDelete(): Promise<void> {
   const threadId = deleteThreadTarget.value.id;
   deleteThreadTarget.value = null;
   await store.deleteThread(threadId);
+}
+
+async function confirmProjectDelete(): Promise<void> {
+  if (!deleteProjectTarget.value) {
+    return;
+  }
+
+  const projectId = deleteProjectTarget.value.id;
+  deleteProjectTarget.value = null;
+  await store.removeProject(projectId);
 }
 
 watch(
@@ -280,7 +386,7 @@ onMounted(async () => {
                       class="icon-button"
                       type="button"
                       :aria-label="`Remove project ${group.project.name}`"
-                      @click.stop="removeProject(group.project.id)"
+                      @click.stop="requestProjectDelete(group.project)"
                     >
                       <i class="pi pi-times" />
                     </button>
@@ -352,8 +458,6 @@ onMounted(async () => {
             <span>{{ gitLabel }}</span>
           </div>
 
-          <PButton label="Refresh models" severity="secondary" text @click="store.refreshModels" />
-          <PButton label="Open" severity="secondary" outlined @click="store.openProjectPath" />
           <PButton
             label="Commit & Push"
             :disabled="!selectedProject || activeThread?.status === 'running'"
@@ -459,7 +563,7 @@ onMounted(async () => {
             </div>
 
             <div v-else class="transcript-stack mx-auto flex max-w-4xl flex-col gap-5 pb-10 pt-6">
-              <template v-for="item in transcriptTimeline" :key="item.id">
+              <template v-for="item in transcriptDisplayItems" :key="item.id">
                 <article
                   v-if="item.itemType === 'message'"
                   class="message-shell"
@@ -474,20 +578,55 @@ onMounted(async () => {
                   <div class="whitespace-pre-wrap text-[15px] leading-7 text-zinc-100">{{ item.content }}</div>
                 </article>
 
-                <article v-else class="tool-call-shell">
-                  <div class="mb-3 flex items-center justify-between gap-4">
-                    <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">Tool call</div>
+                <article
+                  v-else
+                  class="tool-call-group-shell"
+                  :class="{ 'tool-call-group-collapsed': !toolCallGroupExpanded(item.id) }"
+                >
+                  <div class="mb-4 flex items-center justify-between gap-4">
+                    <div class="flex items-center gap-3">
+                      <div>
+                        <div class="text-xs uppercase tracking-[0.26em] text-zinc-500">
+                          {{ item.count === 1 ? 'Tool call' : 'Tool calls' }}
+                        </div>
+                        <div class="mt-2 text-sm text-zinc-400">
+                          {{ item.count }} {{ item.count === 1 ? 'call' : 'calls' }}
+                        </div>
+                      </div>
+                    </div>
                     <div class="flex items-center gap-3">
                       <div class="text-xs text-zinc-500">{{ relativeTime(item.updatedAt) }}</div>
-                      <PTag :value="item.status ?? 'pending'" severity="contrast" />
+                      <button
+                        class="tool-call-toggle"
+                        type="button"
+                        :aria-expanded="toolCallGroupExpanded(item.id)"
+                        :aria-label="toolCallGroupExpanded(item.id) ? 'Collapse tool calls' : 'Expand tool calls'"
+                        @click="toggleToolCallGroup(item.id)"
+                      >
+                        {{ toolCallGroupExpanded(item.id) ? 'Collapse' : 'Expand' }}
+                      </button>
                     </div>
                   </div>
-                  <div class="text-sm font-medium text-white">{{ item.title }}</div>
-                  <div v-if="item.content" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">
-                    {{ item.content }}
-                  </div>
-                  <div v-else-if="item.locations.length" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-400">
-                    {{ item.locations.join('\n') }}
+
+                  <div
+                    v-if="toolCallGroupExpanded(item.id)"
+                    class="tool-call-group-list"
+                  >
+                    <section
+                      v-for="call in item.calls"
+                      :key="call.id"
+                      class="tool-call-entry"
+                    >
+                      <div class="flex items-start justify-between gap-4">
+                        <div class="min-w-0">
+                          <div class="text-sm font-medium text-white">{{ call.title }}</div>
+                          <div v-if="call.kind" class="mt-1 text-xs uppercase tracking-[0.2em] text-zinc-500">
+                            {{ call.kind }}
+                          </div>
+                        </div>
+                        <PTag :value="call.status ?? 'pending'" severity="contrast" />
+                      </div>
+                    </section>
                   </div>
                 </article>
               </template>
@@ -502,7 +641,7 @@ onMounted(async () => {
                 autoResize
                 rows="3"
                 class="w-full"
-                placeholder="Ask Cockpit anything, @tag files/folders, or use /models"
+                placeholder="Ask Copilot anything"
                 @keydown.meta.enter.prevent="submitPrompt()"
                 @keydown.ctrl.enter.prevent="submitPrompt()"
               />
@@ -583,6 +722,24 @@ onMounted(async () => {
               {{ commitOutput }}
             </div>
           </div>
+        </div>
+      </div>
+    </PDialog>
+
+    <PDialog
+      :visible="Boolean(deleteProjectTarget)"
+      modal
+      header="Delete Project"
+      :style="{ width: 'min(420px, 92vw)' }"
+      @update:visible="handleDeleteProjectDialogVisibility"
+    >
+      <div class="space-y-5">
+        <div class="text-sm text-zinc-300">
+          Delete <span class="font-medium text-white">{{ deleteProjectTarget?.name }}</span><span v-if="deleteProjectThreadCount"> and {{ deleteProjectThreadCount }} thread{{ deleteProjectThreadCount === 1 ? '' : 's' }}</span>? This cannot be undone.
+        </div>
+        <div class="flex justify-end gap-3">
+          <PButton label="Cancel" severity="secondary" text @click="closeDeleteProjectDialog" />
+          <PButton label="Delete project" severity="danger" :loading="busy" @click="confirmProjectDelete" />
         </div>
       </div>
     </PDialog>

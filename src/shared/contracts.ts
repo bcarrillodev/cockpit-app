@@ -105,6 +105,7 @@ export interface ThreadOpenPayload {
   thread: ThreadRecord;
   messages: MessageRecord[];
   permissions: PermissionRequestRecord[];
+  toolCalls: ToolCallHistoryRecord[];
 }
 
 export interface CommitAndPushInput {
@@ -188,6 +189,11 @@ export interface ToolCallRecord {
   status: string | null;
   content: string;
   locations: string[];
+}
+
+export interface ToolCallHistoryRecord extends ToolCallRecord {
+  firstSeenAt: string;
+  lastUpdatedAt: string;
 }
 
 export interface PlanEntryRecord {

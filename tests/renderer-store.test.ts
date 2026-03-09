@@ -37,7 +37,8 @@ function openPayload(thread: ThreadRecord): ThreadOpenPayload {
   return {
     thread,
     messages: [],
-    permissions: []
+    permissions: [],
+    toolCalls: []
   };
 }
 
@@ -772,6 +773,95 @@ describe("cockpit renderer store", () => {
       itemType: "tool-call",
       id: "tool-1",
       status: "completed",
+      createdAt: "2026-03-08T10:00:10.000Z",
+      updatedAt: "2026-03-08T10:00:20.000Z"
+    });
+  });
+
+  it("hydrates persisted tool calls when reopening a thread", async () => {
+    const project = makeProject("project-a", "alpha");
+    const thread = makeThread("thread-a", project.id, "2026-03-08T10:00:00.000Z");
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([thread]),
+        create: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue({
+          thread,
+          messages: [
+            {
+              id: "user-1",
+              threadId: thread.id,
+              role: "user",
+              content: "Describe this project",
+              createdAt: "2026-03-08T10:00:00.000Z",
+              kind: "message"
+            }
+          ],
+          permissions: [],
+          toolCalls: [
+            {
+              toolCallId: "tool-1",
+              title: "View README.md",
+              kind: "tool",
+              status: "completed",
+              content: "",
+              locations: ["/tmp/repo/README.md"],
+              firstSeenAt: "2026-03-08T10:00:10.000Z",
+              lastUpdatedAt: "2026-03-08T10:00:20.000Z"
+            }
+          ]
+        }),
+        updateModel: vi.fn()
+      },
+      chat: {
+        send: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        retry: vi.fn().mockResolvedValue(undefined),
+        resolvePermission: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => undefined),
+        getModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        }),
+        refreshModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        })
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const store = useCockpitStore();
+    await store.bootstrap();
+
+    expect(store.transcriptTimeline.map((item) => `${item.itemType}:${item.id}`)).toEqual([
+      "message:user-1",
+      "tool-call:tool-1"
+    ]);
+    expect(store.transcriptTimeline[1]).toMatchObject({
+      itemType: "tool-call",
+      id: "tool-1",
       createdAt: "2026-03-08T10:00:10.000Z",
       updatedAt: "2026-03-08T10:00:20.000Z"
     });

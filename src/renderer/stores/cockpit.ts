@@ -10,6 +10,7 @@ import type {
   ProjectRecord,
   SettingsRecord,
   ThreadRecord,
+  ToolCallHistoryRecord,
   ToolCallRecord,
   PlanEntryRecord,
   GitStatus
@@ -29,10 +30,7 @@ type DraftAssistantMessage = {
   createdAt: string;
 };
 
-type ToolCallTimelineRecord = ToolCallRecord & {
-  firstSeenAt: string;
-  lastUpdatedAt: string;
-};
+type ToolCallTimelineRecord = ToolCallHistoryRecord;
 
 type TranscriptTimelineItem =
   | (MessageRecord & { itemType: "message"; sortAt: string })
@@ -631,6 +629,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
       upsertThread(payload.thread);
       messagesByThread.value[threadId] = payload.messages;
       permissionsByThread.value[threadId] = payload.permissions;
+      toolCallsByThread.value[threadId] = [...payload.toolCalls].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
       models.value = await cockpitApi().chat.getModels(threadId);
     } catch (error) {
       errorMessage.value = toErrorMessage(error, "Failed to open thread.");

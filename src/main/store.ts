@@ -7,7 +7,8 @@ import {
   type ProjectRecord,
   type SettingsRecord,
   type ThreadOpenPayload,
-  type ThreadRecord
+  type ThreadRecord,
+  type ToolCallHistoryRecord
 } from "../shared/contracts";
 
 type JsonFile<T> = {
@@ -86,6 +87,7 @@ export class AppStore {
   private settingsFile: JsonFile<SettingsRecord>;
   private cliHealthFile: JsonFile<CliHealth>;
   private messagesPath: string;
+  private toolCallsPath: string;
 
   constructor(rootPath: string) {
     this.rootPath = rootPath;
@@ -116,11 +118,13 @@ export class AppStore {
       }
     };
     this.messagesPath = join(rootPath, "messages");
+    this.toolCallsPath = join(rootPath, "tool-calls");
   }
 
   async init(): Promise<void> {
     await mkdir(this.rootPath, { recursive: true });
     await mkdir(this.messagesPath, { recursive: true });
+    await mkdir(this.toolCallsPath, { recursive: true });
     await Promise.all([
       readJson(this.projectsFile),
       readJson(this.threadsFile),
@@ -182,7 +186,12 @@ export class AppStore {
     await writeJson(this.projectsFile, projects);
     await writeJson(this.threadsFile, threads);
     await writeJson(this.permissionsFile, permissions);
-    await Promise.all(removedThreadIds.map((threadId) => rm(this.messageFile(threadId), { force: true })));
+    await Promise.all(
+      removedThreadIds.flatMap((threadId) => [
+        rm(this.messageFile(threadId), { force: true }),
+        rm(this.toolCallFile(threadId), { force: true })
+      ])
+    );
 
     await writeJson(this.settingsFile, {
       ...settings,
@@ -264,7 +273,10 @@ export class AppStore {
     );
     await writeJson(this.threadsFile, threads);
     await writeJson(this.permissionsFile, permissions);
-    await rm(this.messageFile(threadId), { force: true });
+    await Promise.all([
+      rm(this.messageFile(threadId), { force: true }),
+      rm(this.toolCallFile(threadId), { force: true })
+    ]);
   }
 
   async listMessages(threadId: string): Promise<MessageRecord[]> {
@@ -282,6 +294,33 @@ export class AppStore {
 
   async appendMessage(message: MessageRecord): Promise<void> {
     await appendFile(this.messageFile(message.threadId), `${JSON.stringify(message)}\n`, "utf8");
+  }
+
+  async listToolCalls(threadId: string): Promise<ToolCallHistoryRecord[]> {
+    return readJson<ToolCallHistoryRecord[]>({
+      path: this.toolCallFile(threadId),
+      fallback: []
+    }).then((toolCalls) => toolCalls.sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt)));
+  }
+
+  async upsertToolCall(threadId: string, toolCall: ToolCallHistoryRecord): Promise<ToolCallHistoryRecord> {
+    const toolCalls = await this.listToolCalls(threadId);
+    const existing = toolCalls.findIndex((entry) => entry.toolCallId === toolCall.toolCallId);
+
+    if (existing >= 0) {
+      toolCalls[existing] = toolCall;
+    } else {
+      toolCalls.push(toolCall);
+    }
+
+    await writeJson(
+      {
+        path: this.toolCallFile(threadId),
+        fallback: []
+      },
+      toolCalls.sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt))
+    );
+    return toolCall;
   }
 
   async getPermissions(threadId?: string): Promise<PermissionRequestRecord[]> {
@@ -337,11 +376,16 @@ export class AppStore {
     return {
       thread,
       messages: await this.listMessages(threadId),
-      permissions: await this.getPermissions(threadId)
+      permissions: await this.getPermissions(threadId),
+      toolCalls: await this.listToolCalls(threadId)
     };
   }
 
   private messageFile(threadId: string): string {
     return join(this.messagesPath, `${threadId}.jsonl`);
+  }
+
+  private toolCallFile(threadId: string): string {
+    return join(this.toolCallsPath, `${threadId}.json`);
   }
 }

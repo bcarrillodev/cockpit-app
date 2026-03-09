@@ -29,6 +29,7 @@ import {
   type PlanEntryRecord,
   type ProjectRecord,
   type ThreadRecord,
+  type ToolCallHistoryRecord,
   type ToolCallRecord
 } from "../shared/contracts";
 import { buildBootstrapPrompt } from "../shared/chat-bootstrap";
@@ -57,7 +58,7 @@ type Runtime = {
   assistantContent: string;
   thoughtMessageId: string | null;
   thoughtContent: string;
-  toolCalls: Map<string, ToolCallRecord>;
+  toolCalls: Map<string, ToolCallHistoryRecord>;
   pendingPermissions: Map<string, PendingPermission>;
   ready: Promise<void>;
 };
@@ -94,6 +95,30 @@ function toToolCallRecord(toolCall: ToolCall | ToolCallUpdate, previous?: ToolCa
     status: toolCall.status ?? previous?.status ?? null,
     content: contentToText(toolCall.content) || previous?.content || "",
     locations: toolCall.locations?.map((location) => location.path) ?? previous?.locations ?? []
+  };
+}
+
+function toToolCallHistoryRecord(
+  toolCall: ToolCall | ToolCallUpdate,
+  timestamp: string,
+  previous?: ToolCallHistoryRecord
+): ToolCallHistoryRecord {
+  const current = toToolCallRecord(toolCall, previous);
+  return {
+    ...current,
+    firstSeenAt: previous?.firstSeenAt ?? timestamp,
+    lastUpdatedAt: timestamp
+  };
+}
+
+function stripToolCallHistory(toolCall: ToolCallHistoryRecord): ToolCallRecord {
+  return {
+    toolCallId: toolCall.toolCallId,
+    title: toolCall.title,
+    kind: toolCall.kind,
+    status: toolCall.status,
+    content: toolCall.content,
+    locations: toolCall.locations
   };
 }
 
@@ -573,7 +598,7 @@ export class ChatManager {
       assistantContent: "",
       thoughtMessageId: null,
       thoughtContent: "",
-      toolCalls: new Map(),
+      toolCalls: new Map((await this.store.listToolCalls(preparedThread.id)).map((toolCall) => [toolCall.toolCallId, toolCall])),
       pendingPermissions: new Map(),
       ready: Promise.resolve()
     };
@@ -827,23 +852,25 @@ export class ChatManager {
 
     switch (update.sessionUpdate) {
       case "tool_call": {
-        const toolCall = toToolCallRecord(update);
+        const toolCall = toToolCallHistoryRecord(update, nowIso(), runtime.toolCalls.get(update.toolCallId));
         runtime.toolCalls.set(toolCall.toolCallId, toolCall);
+        await this.store.upsertToolCall(threadId, toolCall);
         this.emit({
           type: "tool-updated",
           threadId,
-          toolCall
+          toolCall: stripToolCallHistory(toolCall)
         });
         break;
       }
       case "tool_call_update": {
         const previous = runtime.toolCalls.get(update.toolCallId);
-        const toolCall = toToolCallRecord(update, previous);
+        const toolCall = toToolCallHistoryRecord(update, nowIso(), previous);
         runtime.toolCalls.set(toolCall.toolCallId, toolCall);
+        await this.store.upsertToolCall(threadId, toolCall);
         this.emit({
           type: "tool-updated",
           threadId,
-          toolCall
+          toolCall: stripToolCallHistory(toolCall)
         });
         break;
       }
