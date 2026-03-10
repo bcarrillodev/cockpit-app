@@ -622,6 +622,106 @@ describe("sidebar grouping", () => {
 
   });
 
+  it("hides an assistant response card until response text exists", async () => {
+    vi.useFakeTimers();
+
+    const project = makeProject("project-a", "alpha");
+    const thread = makeThread("thread-a", project.id, "2026-03-08T10:02:00.000Z", "2026-03-08T10:08:00.000Z");
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([thread]),
+        create: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: vi.fn().mockResolvedValue({
+          thread,
+          messages: [
+            {
+              id: "user-1",
+              threadId: thread.id,
+              role: "user",
+              content: "Describe this project.",
+              createdAt: "2026-03-08T10:02:00.000Z",
+              kind: "message"
+            },
+            {
+              id: "response-1",
+              threadId: thread.id,
+              role: "assistant",
+              content: "   ",
+              createdAt: "2026-03-08T10:05:00.000Z",
+              kind: "message"
+            }
+          ],
+          permissions: []
+        }),
+        updateModel: vi.fn(),
+        updateReasoning: vi.fn()
+      },
+      chat: {
+        send: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        retry: vi.fn().mockResolvedValue(undefined),
+        resolvePermission: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => undefined),
+        getModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        }),
+        refreshModels: vi.fn().mockResolvedValue({
+          models: [],
+          currentModelId: null,
+          discoveredAt: "2026-03-08T00:00:00.000Z",
+          source: "fallback"
+        })
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [createPinia()],
+        directives: {
+          tooltip: tooltipDirectiveStub
+        },
+        stubs: {
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
+          PDrawer: { template: "<div><slot /></div>" },
+          PInputText: { template: "<input />" },
+          PMessage: { template: "<div><slot /></div>" },
+          PSelect: { template: "<div />" },
+          PTag: { template: "<span><slot /></span>" },
+          PTextarea: { template: "<textarea />" }
+        }
+      }
+    });
+
+    await flushPromises();
+
+    const cards = wrapper.findAll(".message-shell");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.text()).toContain("Describe this project.");
+    expect(wrapper.find(".message-response").exists()).toBe(false);
+  });
+
   it("removes a project from Cockpit and leaves the repo untouched", async () => {
     const projectA = makeProject("project-a", "alpha");
     const projectB = makeProject("project-b", "beta");
@@ -708,5 +808,61 @@ describe("sidebar grouping", () => {
     expect(text).toContain(projectB.name);
     expect(text).toContain(threadB.title);
     expect(removeProject).toHaveBeenCalledWith(projectA.id);
+  });
+
+  it("toggles permission approval from the settings drawer", async () => {
+    let currentSettings = {
+      cliExecutablePath: null,
+      requirePermissionApproval: true,
+      selectedProjectId: null,
+      defaultModelId: null,
+      hiddenProjectIds: []
+    };
+    const updateSettings = vi.fn().mockImplementation(async (patch: Record<string, unknown>) => {
+      currentSettings = {
+        ...currentSettings,
+        ...patch
+      };
+      return currentSettings;
+    });
+
+    installCockpitApi({
+      settings: {
+        get: vi.fn().mockResolvedValue(currentSettings),
+        update: updateSettings
+      }
+    });
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [createPinia()],
+        directives: {
+          tooltip: tooltipDirectiveStub
+        },
+        stubs: {
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
+          PDrawer: { template: "<div><slot /></div>" },
+          PInputText: { template: "<input />" },
+          PMessage: { template: "<div><slot /></div>" },
+          PSelect: { template: "<div />" },
+          PTag: { template: "<span><slot /></span>" },
+          PTextarea: { template: "<textarea />" }
+        }
+      }
+    });
+
+    await flushPromises();
+
+    const toggle = wrapper.find('button[role="switch"]');
+    expect(toggle.attributes("aria-checked")).toBe("true");
+
+    await toggle.trigger("click");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      requirePermissionApproval: false
+    });
+    expect(toggle.attributes("aria-checked")).toBe("false");
   });
 });

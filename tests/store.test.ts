@@ -100,6 +100,7 @@ describe("AppStore", () => {
       expect((await reopened.getProjects()).map((project) => project.id)).toEqual([projectB.id]);
       expect(await reopened.getSettings()).toEqual({
         cliExecutablePath: null,
+        requirePermissionApproval: true,
         selectedProjectId: projectB.id,
         defaultModelId: null,
         defaultReasoningLevelId: null,
@@ -127,6 +128,28 @@ describe("AppStore", () => {
 
       expect(thread.modelId).toBe("gpt-5.4");
       expect(thread.reasoningLevelId).toBe("high");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists permission approval settings across reloads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cockpit-store-"));
+
+    try {
+      const store = new AppStore(root);
+      await store.init();
+
+      await store.updateSettings({
+        requirePermissionApproval: false
+      });
+
+      expect((await store.getSettings()).requirePermissionApproval).toBe(false);
+
+      const reopened = new AppStore(root);
+      await reopened.init();
+
+      expect((await reopened.getSettings()).requirePermissionApproval).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

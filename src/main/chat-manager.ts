@@ -133,6 +133,10 @@ function toPermissionOptions(options: RequestPermissionRequest["options"]): Perm
   }));
 }
 
+function pickAutoApprovePermissionOption(options: PermissionOptionRecord[]): PermissionOptionRecord | null {
+  return options.find((option) => option.kind === "allow_once") ?? options.find((option) => option.kind === "allow_always") ?? null;
+}
+
 function isTextUpdate(update: SessionUpdate): update is SessionUpdate & {
   content: { type: "text"; text: string };
   messageId?: string | null;
@@ -966,20 +970,39 @@ export class ChatManager {
     runtime: Runtime,
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
+    const settings = await this.store.getSettings();
+    const options = toPermissionOptions(params.options);
+    const selectedOption = settings.requirePermissionApproval !== false ? null : pickAutoApprovePermissionOption(options);
     const permission: PermissionRequestRecord = {
       id: crypto.randomUUID(),
       threadId,
       kind: params.toolCall.kind ?? "tool",
       prompt: params.toolCall.title ?? "Approve tool request",
-      options: toPermissionOptions(params.options),
+      options,
       toolCallId: params.toolCall.toolCallId,
-      status: "pending",
-      selectedOptionId: null,
+      status: selectedOption ? "resolved" : "pending",
+      selectedOptionId: selectedOption?.optionId ?? null,
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
 
     await this.store.upsertPermission(permission);
+
+    if (selectedOption) {
+      this.emit({
+        type: "permission-resolved",
+        threadId,
+        permission
+      });
+
+      return {
+        outcome: {
+          outcome: "selected",
+          optionId: selectedOption.optionId
+        }
+      };
+    }
+
     this.emit({
       type: "permission-requested",
       threadId,

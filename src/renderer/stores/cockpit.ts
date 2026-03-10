@@ -161,6 +161,29 @@ function clearLegacyHiddenProjectsStorage(): void {
   }
 }
 
+function defaultSettings(): SettingsRecord {
+  return {
+    cliExecutablePath: null,
+    requirePermissionApproval: true,
+    selectedProjectId: null,
+    defaultModelId: null,
+    defaultReasoningLevelId: null,
+    hiddenProjectIds: []
+  };
+}
+
+function normalizeSettings(settings: Partial<SettingsRecord> | null | undefined): SettingsRecord {
+  return {
+    ...defaultSettings(),
+    ...settings,
+    requirePermissionApproval: settings?.requirePermissionApproval !== false,
+    defaultModelId: typeof settings?.defaultModelId === "string" ? settings.defaultModelId : null,
+    defaultReasoningLevelId:
+      typeof settings?.defaultReasoningLevelId === "string" ? settings.defaultReasoningLevelId : null,
+    hiddenProjectIds: Array.isArray(settings?.hiddenProjectIds) ? settings.hiddenProjectIds : []
+  };
+}
+
 export const useCockpitStore = defineStore("cockpit", () => {
   const projects = ref<ProjectRecord[]>([]);
   const threads = ref<ThreadRecord[]>([]);
@@ -172,13 +195,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
   const toolCallsByThread = ref<Record<string, ToolCallTimelineRecord[]>>({});
   const plansByThread = ref<Record<string, PlanEntryRecord[]>>({});
   const cliHealth = ref<CliHealth | null>(null);
-  const settings = ref<SettingsRecord>({
-    cliExecutablePath: null,
-    selectedProjectId: null,
-    defaultModelId: null,
-    defaultReasoningLevelId: null,
-    hiddenProjectIds: []
-  });
+  const settings = ref<SettingsRecord>(defaultSettings());
   const gitStatus = ref<GitStatus>(emptyGitStatus());
   const changedFiles = ref<ChangedFileRecord[]>([]);
   const models = ref<ModelDiscoveryResult | null>(null);
@@ -445,12 +462,12 @@ export const useCockpitStore = defineStore("cockpit", () => {
     errorMessage.value = null;
 
     try {
-      settings.value = await cockpitApi().settings.get();
+      settings.value = normalizeSettings(await cockpitApi().settings.get());
       clearLegacyHiddenProjectsStorage();
       if (settings.value.hiddenProjectIds.length) {
-        settings.value = await cockpitApi().settings.update({
+        settings.value = normalizeSettings(await cockpitApi().settings.update({
           hiddenProjectIds: []
-        });
+        }));
       }
       await Promise.all([refreshCliHealth(), refreshProjects(), refreshThreads()]);
       const preferredProjectId = settings.value.selectedProjectId;
@@ -549,7 +566,7 @@ export const useCockpitStore = defineStore("cockpit", () => {
 
       await refreshProjects();
       await refreshThreads();
-      settings.value = await cockpitApi().settings.get();
+      settings.value = normalizeSettings(await cockpitApi().settings.get());
 
       const nextProjectId = projects.value.some((project) => project.id === settings.value.selectedProjectId)
         ? settings.value.selectedProjectId
@@ -803,8 +820,10 @@ export const useCockpitStore = defineStore("cockpit", () => {
   }
 
   async function saveSettings(patch: Partial<SettingsRecord>): Promise<void> {
-    settings.value = await cockpitApi().settings.update(patch);
-    await refreshCliHealth();
+    settings.value = normalizeSettings(await cockpitApi().settings.update(patch));
+    if ("cliExecutablePath" in patch) {
+      await refreshCliHealth();
+    }
   }
 
   async function openProjectPath(): Promise<void> {

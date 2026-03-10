@@ -19,6 +19,7 @@ type JsonFile<T> = {
 function defaultSettings(): SettingsRecord {
   return {
     cliExecutablePath: null,
+    requirePermissionApproval: true,
     selectedProjectId: null,
     defaultModelId: null,
     defaultReasoningLevelId: null,
@@ -30,6 +31,7 @@ function normalizeSettings(settings: Partial<SettingsRecord> | null | undefined)
   return {
     ...defaultSettings(),
     ...settings,
+    requirePermissionApproval: settings?.requirePermissionApproval !== false,
     defaultModelId: typeof settings?.defaultModelId === "string" ? settings.defaultModelId : null,
     defaultReasoningLevelId:
       typeof settings?.defaultReasoningLevelId === "string" ? settings.defaultReasoningLevelId : null,

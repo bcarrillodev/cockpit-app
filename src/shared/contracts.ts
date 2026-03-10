@@ -105,6 +105,7 @@ export interface ModelDiscoveryResult {
 
 export interface SettingsRecord {
   cliExecutablePath: string | null;
+  requirePermissionApproval: boolean;
   selectedProjectId: string | null;
   defaultModelId: string | null;
   defaultReasoningLevelId?: string | null;

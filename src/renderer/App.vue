@@ -89,6 +89,7 @@ const composerPrimaryActionLabel = computed(() => (isThreadRunning.value ? "Stop
 
 const modelOptions = computed(() => models.value?.models ?? []);
 const reasoningOptions = computed(() => models.value?.reasoningLevels ?? []);
+const permissionApprovalEnabled = computed(() => store.settings.requirePermissionApproval !== false);
 
 function showThreadIndicator(thread: ThreadRecord): boolean {
   return thread.status === "running" || thread.id === activeThreadId.value;
@@ -182,6 +183,14 @@ const transcriptDisplayItems = computed<TranscriptDisplayItem[]>(() => {
   const items: TranscriptDisplayItem[] = [];
   let pendingToolCalls: TranscriptToolCallItem[] = [];
 
+  const shouldRenderMessage = (item: TranscriptMessageItem): boolean => {
+    if (item.role !== "assistant" || item.kind === "thought") {
+      return true;
+    }
+
+    return Boolean(item.content.trim());
+  };
+
   const flushToolCalls = () => {
     if (!pendingToolCalls.length) {
       return;
@@ -205,7 +214,9 @@ const transcriptDisplayItems = computed<TranscriptDisplayItem[]>(() => {
     }
 
     flushToolCalls();
-    items.push(item);
+    if (shouldRenderMessage(item)) {
+      items.push(item);
+    }
   }
 
   flushToolCalls();
@@ -230,6 +241,12 @@ async function handleComposerPrimaryAction(): Promise<void> {
   }
 
   await submitPrompt();
+}
+
+async function togglePermissionApproval(): Promise<void> {
+  await store.saveSettings({
+    requirePermissionApproval: !permissionApprovalEnabled.value
+  });
 }
 
 function messageLabel(item: Pick<MessageRecord, "kind" | "role">): string {
@@ -872,6 +889,36 @@ onMounted(async () => {
             <div><code>copilot auth login</code></div>
             <div><code>copilot auth status</code></div>
           </div>
+        </div>
+
+        <div class="rounded-3xl border border-white/8 bg-zinc-950/70 p-4">
+          <div class="section-label">Permissions</div>
+          <div class="mt-3 text-sm text-zinc-400">
+            Control whether tool requests pause for approval before they run.
+          </div>
+          <button
+            class="mt-4 flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+            type="button"
+            role="switch"
+            :aria-checked="permissionApprovalEnabled"
+            @click="togglePermissionApproval"
+          >
+            <div class="pr-4">
+              <div class="text-sm font-medium text-white">Require approval for tool permissions</div>
+              <div class="mt-1 text-xs text-zinc-500">
+                Turn this off to auto-approve tool requests instead of showing permission prompts.
+              </div>
+            </div>
+            <span
+              class="relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition"
+              :class="permissionApprovalEnabled ? 'bg-emerald-400/90' : 'bg-zinc-700'"
+            >
+              <span
+                class="inline-block h-5 w-5 rounded-full bg-white shadow-sm transition"
+                :class="permissionApprovalEnabled ? 'translate-x-6' : 'translate-x-1'"
+              />
+            </span>
+          </button>
         </div>
       </div>
     </PDrawer>
