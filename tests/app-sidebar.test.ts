@@ -303,25 +303,98 @@ describe("sidebar grouping", () => {
 
     const firstProjectGroup = wrapper.find(".project-group");
     const firstProjectPill = firstProjectGroup.find(".project-pill");
-    const projectHeaderButtons = firstProjectGroup.find(".project-pill-header").findAll("button");
-    const projectActionButtons = firstProjectGroup.find(".project-group-actions").findAll("button");
+    const projectHeaderButtons = firstProjectGroup.findAll(".project-pill-header > button, .project-pill-header > .project-group-actions > button");
 
     expect(firstProjectPill.find(".project-pill-body").exists()).toBe(true);
     expect(firstProjectPill.find(".project-thread-list").exists()).toBe(true);
     expect(firstProjectPill.findAll(".thread-row")).toHaveLength(1);
-    expect(projectHeaderButtons).toHaveLength(2);
+    expect(projectHeaderButtons).toHaveLength(3);
     expect(projectHeaderButtons[0]?.attributes("aria-label")).toBe("Hide threads");
     expect(projectHeaderButtons[1]?.text()).toContain(projectA.name);
-    expect(projectActionButtons).toHaveLength(2);
-    expect(projectActionButtons[0]?.attributes("aria-label")).toBe("New thread");
-    expect(projectActionButtons[1]?.attributes("aria-label")).toBe(`Remove project ${projectA.name}`);
+    expect(projectHeaderButtons[2]?.attributes("aria-label")).toBe("Project actions");
+    expect(firstProjectGroup.find(".project-action-menu").exists()).toBe(false);
+
+    await projectHeaderButtons[2]!.trigger("click");
+    await flushPromises();
+
+    const projectActionMenu = firstProjectGroup.find(".project-action-menu");
+    const projectActionItems = projectActionMenu.findAll("button");
+
+    expect(projectActionMenu.exists()).toBe(true);
+    expect(projectActionItems).toHaveLength(2);
+    expect(projectActionItems[0]?.text()).toContain("Add new thread");
+    expect(projectActionItems[1]?.text()).toContain("Remove project");
 
     await projectHeaderButtons[0]!.trigger("click");
     await flushPromises();
 
-    expect(firstProjectGroup.find(".project-group-actions").exists()).toBe(false);
-    expect(firstProjectGroup.find('button[aria-label="New thread"]').exists()).toBe(false);
-    expect(firstProjectGroup.find(`button[aria-label="Remove project ${projectA.name}"]`).exists()).toBe(false);
+    expect(firstProjectGroup.find(".project-pill-body").exists()).toBe(false);
+  });
+
+  it("creates a thread from the project action menu", async () => {
+    const project = makeProject("project-a", "alpha");
+    const thread = makeThread("thread-a", project.id, "2026-03-08T10:02:00.000Z", "2026-03-08T10:07:00.000Z");
+    const createdThread = makeThread("thread-b", project.id, "2026-03-08T10:10:00.000Z");
+    const createThread = vi.fn().mockResolvedValue(createdThread);
+    const openThread = vi.fn()
+      .mockResolvedValueOnce(openPayload(thread))
+      .mockResolvedValueOnce(openPayload(createdThread));
+
+    installCockpitApi({
+      projects: {
+        list: vi.fn().mockResolvedValue([project]),
+        create: vi.fn(),
+        remove: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue(project)
+      },
+      threads: {
+        list: vi.fn().mockResolvedValue([thread]),
+        create: createThread,
+        rename: vi.fn(),
+        delete: vi.fn().mockResolvedValue(undefined),
+        open: openThread,
+        updateModel: vi.fn()
+      },
+      settings: {
+        get: vi.fn().mockResolvedValue({
+          cliExecutablePath: null,
+          selectedProjectId: project.id,
+          defaultModelId: null,
+          hiddenProjectIds: []
+        }),
+        update: vi.fn()
+      }
+    });
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [createPinia()],
+        directives: {
+          tooltip: tooltipDirectiveStub
+        },
+        stubs: {
+          PButton: pButtonStub,
+          PDialog: pDialogStub,
+          PDrawer: { template: "<div><slot /></div>" },
+          PInputText: { template: "<input />" },
+          PMessage: { template: "<div><slot /></div>" },
+          PSelect: { template: "<div />" },
+          PTag: { template: "<span><slot /></span>" },
+          PTextarea: { template: "<textarea />" }
+        }
+      }
+    });
+
+    await flushPromises();
+
+    await wrapper.find('button[aria-label="Project actions"]').trigger("click");
+    await flushPromises();
+    await wrapper.find(".project-action-menu button").trigger("click");
+    await flushPromises();
+
+    expect(createThread).toHaveBeenCalledWith(project.id, undefined, undefined);
+    expect(openThread).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(".project-action-menu").exists()).toBe(false);
   });
 
   it("does not open a thread when clicking its delete button", async () => {
@@ -792,7 +865,9 @@ describe("sidebar grouping", () => {
     });
 
     await flushPromises();
-    await wrapper.find('button[aria-label="Remove project alpha"]').trigger("click");
+    await wrapper.find('button[aria-label="Project actions"]').trigger("click");
+    await flushPromises();
+    await wrapper.findAll(".project-action-menu button")[1]!.trigger("click");
     await flushPromises();
     expect(removeProject).not.toHaveBeenCalled();
 

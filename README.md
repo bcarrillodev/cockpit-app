@@ -120,7 +120,7 @@ Cockpit stores data in Electron's `userData` directory:
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
 

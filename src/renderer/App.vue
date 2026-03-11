@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useCockpitStore } from "./stores/cockpit";
 import type { MessageRecord, ProjectRecord, ThreadRecord } from "../shared/contracts";
@@ -70,6 +70,7 @@ const hasProjects = computed(() => projectThreadGroups.value.length > 0);
 const deleteProjectTarget = ref<ProjectRecord | null>(null);
 const deleteThreadTarget = ref<ThreadRecord | null>(null);
 const collapsedProjects = ref<Record<string, boolean>>({});
+const openProjectActionMenuId = ref<string | null>(null);
 const expandedToolCallGroups = ref<Record<string, boolean>>({});
 const transcriptTail = ref<HTMLElement | null>(null);
 const deleteProjectThreadCount = computed(() => {
@@ -285,6 +286,28 @@ function requestProjectDelete(project: ProjectRecord): void {
   deleteProjectTarget.value = project;
 }
 
+function projectActionMenuVisible(projectId: string): boolean {
+  return openProjectActionMenuId.value === projectId;
+}
+
+function closeProjectActionMenu(): void {
+  openProjectActionMenuId.value = null;
+}
+
+function toggleProjectActionMenu(projectId: string): void {
+  openProjectActionMenuId.value = openProjectActionMenuId.value === projectId ? null : projectId;
+}
+
+async function createThreadFromProjectMenu(projectId: string): Promise<void> {
+  closeProjectActionMenu();
+  await store.createThread(projectId);
+}
+
+function requestProjectDeleteFromMenu(project: ProjectRecord): void {
+  closeProjectActionMenu();
+  requestProjectDelete(project);
+}
+
 function projectThreadsVisible(projectId: string): boolean {
   return !collapsedProjects.value[projectId];
 }
@@ -295,6 +318,9 @@ function toggleProjectThreads(projectId: string): void {
     ...collapsedProjects.value,
     [projectId]: !isCollapsed
   };
+  if (!isCollapsed) {
+    closeProjectActionMenu();
+  }
 }
 
 function toolCallGroupExpanded(groupId: string): boolean {
@@ -383,8 +409,13 @@ watch(commitDialogOpen, (isOpen) => {
 });
 
 onMounted(async () => {
+  window.addEventListener("click", closeProjectActionMenu);
   await store.bootstrap();
   cliExecutableDraft.value = store.settings.cliExecutablePath ?? "";
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("click", closeProjectActionMenu);
 });
 </script>
 
@@ -442,30 +473,49 @@ onMounted(async () => {
                     >
                       <span class="project-pill-name">{{ group.project.name }}</span>
                     </button>
+                    <div class="project-group-actions">
+                      <button
+                        class="icon-button project-actions-button"
+                        type="button"
+                        aria-label="Project actions"
+                        aria-haspopup="menu"
+                        :aria-expanded="projectActionMenuVisible(group.project.id)"
+                        v-tooltip.top="'Project actions'"
+                        @click.stop="toggleProjectActionMenu(group.project.id)"
+                      >
+                        <i class="pi pi-ellipsis-h" />
+                      </button>
+
+                      <div
+                        v-if="projectActionMenuVisible(group.project.id)"
+                        class="project-action-menu"
+                        role="menu"
+                        :aria-label="`Actions for ${group.project.name}`"
+                        @click.stop
+                      >
+                        <button
+                          class="project-action-menu-item"
+                          type="button"
+                          role="menuitem"
+                          @click.stop="createThreadFromProjectMenu(group.project.id)"
+                        >
+                          <i class="pi pi-plus text-xs" />
+                          <span>Add new thread</span>
+                        </button>
+                        <button
+                          class="project-action-menu-item project-action-menu-item-danger"
+                          type="button"
+                          role="menuitem"
+                          @click.stop="requestProjectDeleteFromMenu(group.project)"
+                        >
+                          <i class="pi pi-times text-xs" />
+                          <span>Remove project</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <div v-if="projectThreadsVisible(group.project.id)" class="project-pill-body">
-                    <div class="project-group-actions">
-                      <button
-                        class="icon-button"
-                        type="button"
-                        aria-label="New thread"
-                        v-tooltip.top="'New thread'"
-                        @click.stop="store.createThread(group.project.id)"
-                      >
-                        <i class="pi pi-plus" />
-                      </button>
-                      <button
-                        class="icon-button"
-                        type="button"
-                        :aria-label="`Remove project ${group.project.name}`"
-                        v-tooltip.top="'Remove project'"
-                        @click.stop="requestProjectDelete(group.project)"
-                      >
-                        <i class="pi pi-times" />
-                      </button>
-                    </div>
-
                     <div v-if="group.threads.length" class="project-thread-list">
                       <div
                         v-for="thread in group.threads"
@@ -623,7 +673,7 @@ onMounted(async () => {
                 <i class="pi pi-sparkles text-4xl" />
               </div>
               <div>
-                <div class="text-6xl font-semibold tracking-tight text-white">Let’s build</div>
+                <div class="text-6xl font-semibold tracking-tight text-white">Let's fly</div>
                 <div class="mt-3 text-5xl font-medium text-zinc-500">
                   {{ selectedProject?.name ?? "cockpit-app" }}
                 </div>

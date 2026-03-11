@@ -133,13 +133,6 @@ code {
   box-shadow: none;
 }
 
-.project-pill:hover,
-.project-pill:focus-visible {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
 .sidebar-action:hover,
 .sidebar-action:focus-visible,
 .project-pill:hover,
@@ -158,9 +151,13 @@ code {
   align-items: stretch;
   gap: 0.7rem;
   border-radius: 1rem;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.035) 100%),
+    rgba(9, 11, 19, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 24px rgba(0, 0, 0, 0.18);
   outline: none;
   padding: 0.85rem 1rem;
   color: white;
@@ -194,8 +191,24 @@ code {
 }
 
 .project-pill-active {
-  background: transparent;
-  box-shadow: none;
+  border-color: rgba(255, 255, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.05) 100%),
+    rgba(14, 17, 28, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 10px 30px rgba(0, 0, 0, 0.24);
+}
+
+.project-pill:hover,
+.project-pill:focus-visible {
+  border-color: rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.085) 0%, rgba(255, 255, 255, 0.04) 100%),
+    rgba(11, 14, 23, 0.44);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 28px rgba(0, 0, 0, 0.22);
 }
 
 .project-pill-body {
@@ -203,8 +216,7 @@ code {
   min-width: 0;
   flex-direction: column;
   gap: 0.7rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 0.85rem;
+  padding-top: 0.1rem;
 }
 
 .thread-list {
@@ -233,14 +245,69 @@ code {
 }
 
 .project-group-actions {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  flex: 0 0 auto;
 }
 
 .project-toggle-button {
   flex: 0 0 auto;
+}
+
+.project-actions-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.project-action-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  min-width: 11.5rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.04) 100%),
+    rgba(11, 12, 19, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 40px rgba(0, 0, 0, 0.3);
+  padding: 0.35rem;
+  backdrop-filter: blur(18px);
+}
+
+.project-action-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.6rem;
+  border: 0;
+  border-radius: 0.8rem;
+  background: transparent;
+  padding: 0.7rem 0.8rem;
+  color: #f4f4f5;
+  font: inherit;
+  text-align: left;
+}
+
+.project-action-menu-item:hover,
+.project-action-menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.project-action-menu-item-danger {
+  color: #fda4af;
+}
+
+.project-action-menu-item-danger:hover,
+.project-action-menu-item-danger:focus-visible {
+  background: rgba(244, 63, 94, 0.12);
 }
 
 .project-thread-list {
